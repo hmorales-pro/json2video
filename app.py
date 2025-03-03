@@ -82,7 +82,7 @@ def generate_animated_ass_subtitles(transcription_data, ass_path, normal_color="
         event = pysubs2.SSAEvent()
         event.start = int(start * 1000)
         event.end = int(end * 1000)
-        event.text = f'{{\move(10,500,600,500)}}{text}'
+        event.text = f'{{{{\\move(10,500,600,500)}}}}{text}'
         subs.events.append(event)
 
     subs.save(ass_path)
