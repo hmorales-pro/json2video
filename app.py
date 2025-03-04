@@ -77,6 +77,10 @@ def generate_video_endpoint():
     except Exception as e:
         print(f"Erreur lors de la lecture du fichier ASS : {e}")
 
+    # Afficher les permissions du fichier .ass
+    ass_stat = os.stat(ass_path)
+    print(f"Permissions du fichier ASS : {oct(ass_stat.st_mode)}")
+
     # Définir les permissions du fichier .ass
     os.chown(ass_path, 33, 33)  # www-data utilisateur et groupe
     os.chmod(ass_path, 0o777)  # Permissions 777
