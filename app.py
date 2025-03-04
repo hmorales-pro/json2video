@@ -133,6 +133,11 @@ def generate_video_with_subtitles(images, audio_path, ass_path, output_path, ori
     temp_video_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.mp4")
     clip.write_videofile(temp_video_path, codec='libx264', fps=24, audio_codec='aac')
 
+    # Vérifiez que le fichier .ass existe avant d'exécuter FFmpeg
+    if not os.path.exists(ass_path):
+        print(f"Erreur : Le fichier ASS {ass_path} n'existe pas.")
+        return
+
     result = subprocess.run([
         'ffmpeg', '-y', '-i', temp_video_path, '-vf', f'subtitles="{os.path.abspath(ass_path)}":force_style=FontSize=50', '-c:v', 'libx264', '-c:a', 'aac', '-b:a', '192k', output_path
     ], capture_output=True, text=True)
@@ -141,6 +146,7 @@ def generate_video_with_subtitles(images, audio_path, ass_path, output_path, ori
     print("FFmpeg subtitle embedding stderr:", result.stderr)
 
     os.remove(temp_video_path)
+
 
 # Fonction pour convertir l'audio en format WAV compatible
 def convert_audio_to_wav(audio_path, output_path):
