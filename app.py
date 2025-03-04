@@ -44,9 +44,12 @@ def generate_video_endpoint():
 
     image_paths = []
     for image_file in image_files:
-        image_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}_{image_file.filename}")
-        image_file.save(image_path)
-        image_paths.append(image_path)
+        if image_file.filename.lower().endswith(('png', 'jpg', 'jpeg', 'bmp', 'gif')):
+            image_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}_{image_file.filename}")
+            image_file.save(image_path)
+            image_paths.append(image_path)
+        else:
+            print(f"Fichier ignoré car non valide : {image_file.filename}")
 
     wav_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.wav")
     convert_audio_to_wav(audio_path, wav_path)
@@ -54,20 +57,41 @@ def generate_video_endpoint():
     transcription_data = transcribe_audio_in_chunks(wav_path, chunk_duration_ms=30000)
 
     ass_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.ass")
-    generate_animated_ass_subtitles(transcription_data, ass_path, normal_color=default_color, orientation=orientation)
+    generate_animated_ass_subtitles(transcription_data, os.path.abspath(ass_path), default_color, orientation)
+
+    if not os.path.exists(ass_path):
+        print(f"Erreur : Le fichier ASS {ass_path} n'a pas été créé.")
+        print("Contenu du répertoire outputs :", os.listdir(OUTPUT_FOLDER))
+        return jsonify({'error': 'Subtitle file not created'}), 500
+
+    with open(ass_path, 'r', encoding='utf-8') as f:
+        print("Contenu du fichier ASS :")
+        print(f.read())
 
     output_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.mp4")
     generate_video_with_subtitles(image_paths, wav_path, ass_path, output_path, orientation)
 
+    if not os.path.exists(output_path):
+        print(f"Erreur : La vidéo {output_path} n'a pas été créée.")
+        return jsonify({'error': 'Video file not created'}), 500
+
     return send_file(output_path, as_attachment=True)
 
-def generate_animated_ass_subtitles(transcription_data, ass_path, normal_color="&HFFFFFF&", orientation="landscape"):
+def generate_animated_ass_subtitles(transcription_data, ass_path, default_color="&HFFFFFF&", orientation="landscape"):
     subs = pysubs2.SSAFile()
     subs.info['Title'] = "Sous-titres Animés"
     style = pysubs2.SSAStyle()
     style.fontname = "Arial"
     style.fontsize = 50
-    style.primarycolor = pysubs2.Color(255, 255, 255, 0)  # Blanc sans transparence
+
+    if default_color.startswith('&H') and default_color.endswith('&'):
+        hex_color = default_color[2:-1]
+        b, g, r = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        style.primarycolor = pysubs2.Color(r, g, b, 0)
+    else:
+        r, g, b, a = map(int, default_color.split(','))
+        style.primarycolor = pysubs2.Color(r, g, b, a)
+
     style.backcolor = pysubs2.Color(0, 0, 0, 0)
     style.outline = 1
     style.shadow = 1
@@ -82,10 +106,16 @@ def generate_animated_ass_subtitles(transcription_data, ass_path, normal_color="
         event = pysubs2.SSAEvent()
         event.start = int(start * 1000)
         event.end = int(end * 1000)
-        event.text = f'{{{{\\move(10,500,600,500)}}}}{text}'
+        event.text = f"{{\\move(10,500,600,500)}}{text}"
         subs.events.append(event)
 
     subs.save(ass_path)
+    print(f"Fichier ASS généré : {ass_path}")
+
+    if not os.path.exists(ass_path):
+        print(f"Erreur : Le fichier ASS {ass_path} n'a pas été créé.")
+
+    print("Contenu du répertoire outputs :", os.listdir(OUTPUT_FOLDER))
 
 # Fonction pour redimensionner les images et vérifier leur validité
 def resize_and_validate_images(image_paths, orientation='landscape'):
@@ -113,7 +143,7 @@ def generate_video_with_subtitles(images, audio_path, ass_path, output_path, ori
     clip.write_videofile(temp_video_path, codec='libx264', fps=24, audio_codec='aac')
 
     result = subprocess.run([
-        'ffmpeg', '-y', '-i', temp_video_path, '-vf', f'subtitles={os.path.abspath(ass_path)}:force_style=FontSize=50', '-c:v', 'libx264', '-c:a', 'aac', '-b:a', '192k', output_path
+        'ffmpeg', '-y', '-i', temp_video_path, '-vf', f'subtitles="{os.path.abspath(ass_path)}":force_style=FontSize=50', '-c:v', 'libx264', '-c:a', 'aac', '-b:a', '192k', output_path
     ], capture_output=True, text=True)
 
     print("FFmpeg subtitle embedding stdout:", result.stdout)
@@ -129,13 +159,21 @@ def convert_audio_to_wav(audio_path, output_path):
     print("FFmpeg audio conversion stdout:", result.stdout)
     print("FFmpeg audio conversion stderr:", result.stderr)
 
-def generate_animated_ass_subtitles(transcription_data, ass_path, normal_color="&HFFFFFF&", orientation="landscape"):
+def generate_animated_ass_subtitles(transcription_data, ass_path, default_color="&HFFFFFF&", orientation="landscape"):
     subs = pysubs2.SSAFile()
     subs.info['Title'] = "Sous-titres Animés"
     style = pysubs2.SSAStyle()
     style.fontname = "Arial"
     style.fontsize = 50
-    style.primarycolor = pysubs2.Color(255, 255, 255, 0)  # Blanc sans transparence
+
+    if default_color.startswith('&H') and default_color.endswith('&'):
+        hex_color = default_color[2:-1]
+        b, g, r = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        style.primarycolor = pysubs2.Color(r, g, b, 0)
+    else:
+        r, g, b, a = map(int, default_color.split(','))
+        style.primarycolor = pysubs2.Color(r, g, b, a)
+
     style.backcolor = pysubs2.Color(0, 0, 0, 0)
     style.outline = 1
     style.shadow = 1
@@ -150,11 +188,16 @@ def generate_animated_ass_subtitles(transcription_data, ass_path, normal_color="
         event = pysubs2.SSAEvent()
         event.start = int(start * 1000)
         event.end = int(end * 1000)
-        event.text = f"{{{{\\move(10,500,600,500)}}}}{text}"  # Double accolades pour éviter l'erreur
+        event.text = f"{{\\move(10,500,600,500)}}{text}"
         subs.events.append(event)
 
     subs.save(ass_path)
     print(f"Fichier ASS généré : {ass_path}")
+
+    if not os.path.exists(ass_path):
+        print(f"Erreur : Le fichier ASS {ass_path} n'a pas été créé.")
+
+    print("Contenu du répertoire outputs :", os.listdir(OUTPUT_FOLDER))
 
 # Fonction pour transcrire l'audio en sous-titres via Google Cloud Speech-to-Text
 def transcribe_audio_in_chunks(audio_path, chunk_duration_ms=30000):
