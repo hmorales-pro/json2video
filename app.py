@@ -125,7 +125,10 @@ def resize_and_validate_images(image_paths, orientation='landscape'):
 
 # Fonction pour générer la vidéo avec sous-titres et audio
 def generate_video_with_subtitles(images, audio_path, ass_path, output_path, orientation='landscape'):
+    # Redimensionner et valider les images
     resized_images = resize_and_validate_images(images, orientation)
+
+    # Créer la vidéo à partir des images et de l'audio
     clip = mp.ImageSequenceClip(resized_images, fps=1)
     audio = mp.AudioFileClip(audio_path)
     clip = clip.set_duration(audio.duration)
@@ -133,18 +136,23 @@ def generate_video_with_subtitles(images, audio_path, ass_path, output_path, ori
     temp_video_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.mp4")
     clip.write_videofile(temp_video_path, codec='libx264', fps=24, audio_codec='aac')
 
-    # Vérifiez que le fichier .ass existe avant d'exécuter FFmpeg
+    # Vérifier que le fichier .ass existe avant d'exécuter FFmpeg
     if not os.path.exists(ass_path):
         print(f"Erreur : Le fichier ASS {ass_path} n'existe pas.")
         return
 
+    # Convertir le chemin du fichier .ass en chemin absolu
+    abs_ass_path = os.path.abspath(ass_path)
+
+    # Exécuter FFmpeg pour intégrer les sous-titres
     result = subprocess.run([
-        'ffmpeg', '-y', '-i', temp_video_path, '-vf', f'subtitles="{os.path.abspath(ass_path)}":force_style=FontSize=50', '-c:v', 'libx264', '-c:a', 'aac', '-b:a', '192k', output_path
+        'ffmpeg', '-y', '-i', temp_video_path, '-vf', f'subtitles="{abs_ass_path}":force_style=FontSize=50', '-c:v', 'libx264', '-c:a', 'aac', '-b:a', '192k', output_path
     ], capture_output=True, text=True)
 
     print("FFmpeg subtitle embedding stdout:", result.stdout)
     print("FFmpeg subtitle embedding stderr:", result.stderr)
 
+    # Supprimer le fichier vidéo temporaire
     os.remove(temp_video_path)
 
 
