@@ -8,8 +8,6 @@ from pydub import AudioSegment
 from PIL import Image
 from dotenv import load_dotenv
 from google.cloud import speech
-import stat
-import time
 import tempfile
 
 # Charger les variables d'environnement depuis le fichier .env
@@ -62,8 +60,6 @@ def generate_video_endpoint():
     ass_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.ass")
     generate_animated_ass_subtitles(transcription_data, os.path.abspath(ass_path), default_color, orientation)
 
-    os.chmod(ass_path, 0o644)
-
     if not os.path.exists(ass_path):
         print(f"Erreur : Le fichier ASS {ass_path} n'a pas été créé.")
         return jsonify({'error': 'Subtitle file not created'}), 500
@@ -112,11 +108,6 @@ def generate_animated_ass_subtitles(transcription_data, ass_path, default_color=
     subs.save(ass_path)
     print(f"Fichier ASS généré : {ass_path}")
 
-    if not os.path.exists(ass_path):
-        print(f"Erreur : Le fichier ASS {ass_path} n'a pas été créé.")
-
-    print("Contenu du répertoire outputs :", os.listdir(OUTPUT_FOLDER))
-
 # Fonction pour redimensionner les images et vérifier leur validité
 def resize_and_validate_images(image_paths, orientation='landscape'):
     output_size = (1280, 720) if orientation == 'landscape' else (720, 1280)
@@ -159,46 +150,6 @@ def convert_audio_to_wav(audio_path, output_path):
     print("FFmpeg audio conversion stdout:", result.stdout)
     print("FFmpeg audio conversion stderr:", result.stderr)
 
-def generate_animated_ass_subtitles(transcription_data, ass_path, default_color="&HFFFFFF&", orientation="landscape"):
-    subs = pysubs2.SSAFile()
-    subs.info['Title'] = "Sous-titres Animés"
-    style = pysubs2.SSAStyle()
-    style.fontname = "Arial"
-    style.fontsize = 50
-
-    if default_color.startswith('&H') and default_color.endswith('&'):
-        hex_color = default_color[2:-1]
-        b, g, r = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
-        style.primarycolor = pysubs2.Color(r, g, b, 0)
-    else:
-        r, g, b, a = map(int, default_color.split(','))
-        style.primarycolor = pysubs2.Color(r, g, b, a)
-
-    style.backcolor = pysubs2.Color(0, 0, 0, 0)
-    style.outline = 1
-    style.shadow = 1
-    style.alignment = 2 if orientation == "landscape" else 6
-    subs.styles['Default'] = style
-
-    for word_info in transcription_data:
-        start = word_info['start']
-        end = word_info['end']
-        text = word_info['word']
-
-        event = pysubs2.SSAEvent()
-        event.start = int(start * 1000)
-        event.end = int(end * 1000)
-        event.text = f"{{\\move(10,500,600,500)}}{text}"
-        subs.events.append(event)
-
-    subs.save(ass_path)
-    print(f"Fichier ASS généré : {ass_path}")
-
-    if not os.path.exists(ass_path):
-        print(f"Erreur : Le fichier ASS {ass_path} n'a pas été créé.")
-
-    print("Contenu du répertoire outputs :", os.listdir(OUTPUT_FOLDER))
-
 # Fonction pour transcrire l'audio en sous-titres via Google Cloud Speech-to-Text
 def transcribe_audio_in_chunks(audio_path, chunk_duration_ms=30000):
     audio_segment = AudioSegment.from_wav(audio_path)
@@ -208,48 +159,9 @@ def transcribe_audio_in_chunks(audio_path, chunk_duration_ms=30000):
     for start_ms in range(0, total_duration_ms, chunk_duration_ms):
         end_ms = min(start_ms + chunk_duration_ms, total_duration_ms)
         chunk = audio_segment[start_ms:end_ms]
-        chunk_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.wav")
-        chunk.export(chunk_path, format="wav")
-
-        with open(chunk_path, "rb") as audio_file:
-            audio_content = audio_file.read()
-
-        audio = speech.RecognitionAudio(content=audio_content)
-        config = speech.RecognitionConfig(
-            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-            sample_rate_hertz=44100,
-            language_code="fr-FR",
-            enable_word_time_offsets=True
-        )
-
-        try:
-            response = client.recognize(config=config, audio=audio)
-
-            for result in response.results:
-                for word_info in result.alternatives[0].words:
-                    transcription_data.append({
-                        "word": word_info.word,
-                        "start": word_info.start_time.total_seconds() + start_ms / 1000,
-                        "end": word_info.end_time.total_seconds() + start_ms / 1000
-                    })
-        except Exception as e:
-            print(f"Erreur lors de la transcription du segment : {e}")
-
-        os.remove(chunk_path)
-
-    return transcription_data
-
-# Fonction pour générer des sous-titres animés au format ASS
-def transcribe_audio_in_chunks(audio_path, chunk_duration_ms=30000):
-    audio_segment = AudioSegment.from_wav(audio_path)
-    total_duration_ms = len(audio_segment)
-    transcription_data = []
-    client = speech.SpeechClient()
-    for start_ms in range(0, total_duration_ms, chunk_duration_ms):
-        end_ms = min(start_ms + chunk_duration_ms, total_duration_ms)
-        chunk = audio_segment[start_ms:end_ms]
-        chunk_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.wav")
-        chunk.export(chunk_path, format="wav")
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as chunk_file:
+            chunk_path = chunk_file.name
+            chunk.export(chunk_path, format="wav")
 
         with open(chunk_path, "rb") as audio_file:
             audio_content = audio_file.read()
