@@ -61,10 +61,8 @@ def generate_video_endpoint():
     ass_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.ass")
     generate_animated_ass_subtitles(transcription_data, os.path.abspath(ass_path), default_color, orientation)
 
-    # Assurer un délai pour éviter les problèmes d'accès au fichier
     time.sleep(1)
 
-    # Vérifier si le fichier .ass existe et est lisible
     if not os.path.exists(ass_path):
         print(f"Erreur : Le fichier ASS {ass_path} n'a pas été créé.")
         print("Contenu du répertoire outputs :", os.listdir(OUTPUT_FOLDER))
@@ -77,17 +75,14 @@ def generate_video_endpoint():
     except Exception as e:
         print(f"Erreur lors de la lecture du fichier ASS : {e}")
 
-    # Afficher les permissions du fichier .ass
     ass_stat = os.stat(ass_path)
     print(f"Permissions du fichier ASS : {oct(ass_stat.st_mode)}")
 
-    # Définir les permissions du fichier .ass
-    os.chown(ass_path, 33, 33)  # www-data utilisateur et groupe
-    os.chmod(ass_path, 0o777)  # Permissions 777
+    os.chown(ass_path, 33, 33)
+    os.chmod(ass_path, 0o777)
 
-    # Test de lecture du fichier ASS avec ffmpeg
     ffmpeg_test = subprocess.run([
-        'ffmpeg', '-hide_banner', '-loglevel', 'error', '-vf', f'subtitles={os.path.abspath(ass_path)}', '-f', 'null', '-'
+        'ffmpeg', '-y', '-i', 'nullsrc', '-vf', f'subtitles={os.path.abspath(ass_path)}', '-f', 'null', '-'
     ], capture_output=True, text=True)
 
     if ffmpeg_test.returncode != 0:
