@@ -82,7 +82,7 @@ def generate_video_endpoint():
     os.chmod(ass_path, 0o777)
 
     ffmpeg_test = subprocess.run([
-        'ffmpeg', '-y', '-i', 'nullsrc', '-vf', f'subtitles={os.path.abspath(ass_path)}', '-f', 'null', '-'
+        'ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=s=1280x720:d=1', '-vf', f'subtitles={os.path.abspath(ass_path)}', '-f', 'null', '-'
     ], capture_output=True, text=True)
 
     if ffmpeg_test.returncode != 0:
