@@ -8,6 +8,7 @@ from pydub import AudioSegment
 from PIL import Image
 from dotenv import load_dotenv
 from google.cloud import speech
+import stat
 
 # Charger les variables d'environnement depuis le fichier .env
 load_dotenv()
@@ -58,6 +59,10 @@ def generate_video_endpoint():
 
     ass_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.ass")
     generate_animated_ass_subtitles(transcription_data, os.path.abspath(ass_path), default_color, orientation)
+
+    # Définir les permissions du fichier .ass
+    os.chown(ass_path, 33, 33)  # www-data utilisateur et groupe
+    os.chmod(ass_path, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)  # Permissions 777
 
     if not os.path.exists(ass_path):
         print(f"Erreur : Le fichier ASS {ass_path} n'a pas été créé.")
