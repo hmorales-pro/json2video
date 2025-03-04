@@ -60,8 +60,9 @@ def generate_video_endpoint():
     ass_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.ass")
     generate_animated_ass_subtitles(transcription_data, os.path.abspath(ass_path), default_color, orientation)
 
+    # Vérifier que le fichier .ass existe avant d'exécuter FFmpeg
     if not os.path.exists(ass_path):
-        print(f"Erreur : Le fichier ASS {ass_path} n'a pas été créé.")
+        print(f"Erreur : Le fichier ASS {ass_path} n'existe pas.")
         return jsonify({'error': 'Subtitle file not created'}), 500
 
     output_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.mp4")
@@ -125,10 +126,7 @@ def resize_and_validate_images(image_paths, orientation='landscape'):
 
 # Fonction pour générer la vidéo avec sous-titres et audio
 def generate_video_with_subtitles(images, audio_path, ass_path, output_path, orientation='landscape'):
-    # Redimensionner et valider les images
     resized_images = resize_and_validate_images(images, orientation)
-
-    # Créer la vidéo à partir des images et de l'audio
     clip = mp.ImageSequenceClip(resized_images, fps=1)
     audio = mp.AudioFileClip(audio_path)
     clip = clip.set_duration(audio.duration)
@@ -154,7 +152,6 @@ def generate_video_with_subtitles(images, audio_path, ass_path, output_path, ori
 
     # Supprimer le fichier vidéo temporaire
     os.remove(temp_video_path)
-
 
 # Fonction pour convertir l'audio en format WAV compatible
 def convert_audio_to_wav(audio_path, output_path):
