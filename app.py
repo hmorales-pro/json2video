@@ -9,6 +9,7 @@ from PIL import Image
 from dotenv import load_dotenv
 from google.cloud import speech
 import stat
+import time
 
 # Charger les variables d'environnement depuis le fichier .env
 load_dotenv()
@@ -60,18 +61,25 @@ def generate_video_endpoint():
     ass_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.ass")
     generate_animated_ass_subtitles(transcription_data, os.path.abspath(ass_path), default_color, orientation)
 
-    # Définir les permissions du fichier .ass
-    os.chown(ass_path, 33, 33)  # www-data utilisateur et groupe
-    os.chmod(ass_path, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)  # Permissions 777
+    # Assurer un délai pour éviter les problèmes d'accès au fichier
+    time.sleep(1)
 
+    # Vérifier si le fichier .ass existe et est lisible
     if not os.path.exists(ass_path):
         print(f"Erreur : Le fichier ASS {ass_path} n'a pas été créé.")
         print("Contenu du répertoire outputs :", os.listdir(OUTPUT_FOLDER))
         return jsonify({'error': 'Subtitle file not created'}), 500
 
-    with open(ass_path, 'r', encoding='utf-8') as f:
-        print("Contenu du fichier ASS :")
-        print(f.read())
+    try:
+        with open(ass_path, 'r', encoding='utf-8') as f:
+            print("Le fichier ASS est lisible :")
+            print(f.read())
+    except Exception as e:
+        print(f"Erreur lors de la lecture du fichier ASS : {e}")
+
+    # Définir les permissions du fichier .ass
+    os.chown(ass_path, 33, 33)  # www-data utilisateur et groupe
+    os.chmod(ass_path, 0o777)  # Permissions 777
 
     output_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.mp4")
     generate_video_with_subtitles(image_paths, wav_path, ass_path, output_path, orientation)
