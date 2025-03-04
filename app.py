@@ -85,6 +85,16 @@ def generate_video_endpoint():
     os.chown(ass_path, 33, 33)  # www-data utilisateur et groupe
     os.chmod(ass_path, 0o777)  # Permissions 777
 
+    # Test de lecture du fichier ASS avec ffmpeg
+    ffmpeg_test = subprocess.run([
+        'ffmpeg', '-hide_banner', '-loglevel', 'error', '-vf', f'subtitles={os.path.abspath(ass_path)}', '-f', 'null', '-'
+    ], capture_output=True, text=True)
+
+    if ffmpeg_test.returncode != 0:
+        print("Erreur FFmpeg lors de la lecture du fichier ASS :")
+        print(ffmpeg_test.stderr)
+        return jsonify({'error': 'FFmpeg cannot read subtitle file'}), 500
+
     output_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.mp4")
     generate_video_with_subtitles(image_paths, wav_path, ass_path, output_path, orientation)
 
