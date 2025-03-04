@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, abort
 import os
 import uuid
 import subprocess
@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from google.cloud import speech
 import stat
 import time
+import tempfile
 
 # Charger les variables d'environnement depuis le fichier .env
 load_dotenv()
