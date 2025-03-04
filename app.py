@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, abort
 import os
 import uuid
 import subprocess
@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 from google.cloud import speech
 import stat
 import time
+import uuid
+import tempfile
 
 # Charger les variables d'environnement depuis le fichier .env
 load_dotenv()
@@ -30,74 +32,96 @@ def index():
 
 # Route pour générer la vidéo avec sous-titres animés
 @app.route('/generate-video', methods=['POST'])
-def generate_video_endpoint():
-    print("Fichiers reçus :", request.files.keys())
-
-    audio_file = request.files.get('audio')
-    image_files = request.files.getlist('images')
-    orientation = request.form.get('orientation', 'landscape')
-    default_color = request.form.get('default_color', '&HFFFFFF&')
-
-    if not audio_file or not image_files:
-        return jsonify({'error': 'Audio file and at least one image file are required'}), 400
-
-    audio_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}_{audio_file.filename}")
-    audio_file.save(audio_path)
-
-    image_paths = []
-    for image_file in image_files:
-        if image_file.filename.lower().endswith(('png', 'jpg', 'jpeg', 'bmp', 'gif')):
-            image_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}_{image_file.filename}")
-            image_file.save(image_path)
-            image_paths.append(image_path)
-        else:
-            print(f"Fichier ignoré car non valide : {image_file.filename}")
-
-    wav_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.wav")
-    convert_audio_to_wav(audio_path, wav_path)
-
-    transcription_data = transcribe_audio_in_chunks(wav_path, chunk_duration_ms=30000)
-
-    ass_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.ass")
-    generate_animated_ass_subtitles(transcription_data, os.path.abspath(ass_path), default_color, orientation)
-
-    time.sleep(1)
-
-    if not os.path.exists(ass_path):
-        print(f"Erreur : Le fichier ASS {ass_path} n'a pas été créé.")
-        print("Contenu du répertoire outputs :", os.listdir(OUTPUT_FOLDER))
-        return jsonify({'error': 'Subtitle file not created'}), 500
-
+def generate_video():
+    # Récupérer le texte du sous-titre depuis la requête
+    text = request.form.get('text')
+    if not text:
+        abort(400, "Le texte du sous-titre est requis.")
+    
+    # Générer le contenu du fichier de sous-titres .ass
+    ass_content = generate_ass_from_text(text)
+    
+    # Enregistrer le contenu .ass dans un fichier temporaire
+    temp_dir = tempfile.gettempdir()
+    subtitle_filename = f"subtitle_{uuid.uuid4().hex}.ass"
+    subtitle_path = os.path.join(temp_dir, subtitle_filename)
     try:
-        with open(ass_path, 'r', encoding='utf-8') as f:
-            print("Le fichier ASS est lisible :")
-            print(f.read())
+        with open(subtitle_path, 'w', encoding='utf-8') as f:
+            f.write(ass_content)
     except Exception as e:
-        print(f"Erreur lors de la lecture du fichier ASS : {e}")
+        app.logger.error(f"Erreur lors de la création du fichier .ass: {e}")
+        abort(500, "Impossible de créer le fichier de sous-titres.")
+    
+    # Régler les permissions du fichier pour qu'il soit lisible par FFmpeg
+    try:
+        os.chmod(subtitle_path, 0o644)
+    except Exception as e:
+        app.logger.warning(f"Impossible de modifier les permissions de {subtitle_path}: {e}")
+    
+    # Vérifier l'existence et l'accessibilité du fichier de sous-titres
+    if not os.path.exists(subtitle_path) or not os.access(subtitle_path, os.R_OK):
+        app.logger.error(f"Le fichier de sous-titres {subtitle_path} est inaccessible.")
+        abort(500, "Le fichier de sous-titres est inaccessible.")
+    
+    # Définir les chemins d'entrée et de sortie pour FFmpeg
+    input_video = "/chemin/vers/video_source.mp4"  # Chemin de la vidéo source
+    output_video = os.path.join(temp_dir, f"video_generee_{uuid.uuid4().hex}.mp4")
+    
+    # Préparer l'argument de filtre pour intégrer les sous-titres
+    subtitle_arg = subtitle_path
+    if os.name == 'nt':
+        # Échapper les backslashes et les deux-points sur Windows
+        subtitle_arg = subtitle_arg.replace('\\', '\\\\').replace(':', '\\:')
+    subtitle_arg = f"ass='{subtitle_arg}'"
+    
+    ffmpeg_cmd = [
+        "ffmpeg", "-y", "-i", input_video,
+        "-vf", subtitle_arg,
+        "-c:v", "libx264", "-c:a", "aac",
+        output_video
+    ]
+    
+    # Exécuter FFmpeg et gérer les erreurs éventuelles
+    try:
+        subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        app.logger.error(f"Erreur FFmpeg: {e.stderr}")
+        # Nettoyer le fichier de sous-titres temporaire en cas d'échec
+        try:
+            os.remove(subtitle_path)
+        except OSError:
+            pass
+        abort(500, "Erreur lors de la génération de la vidéo (FFmpeg).")
+    
+    # Vérifier que la vidéo de sortie a bien été créée
+    if not os.path.exists(output_video):
+        app.logger.error("La vidéo de sortie n'a pas été créée par FFmpeg.")
+        try:
+            os.remove(subtitle_path)
+        except OSError:
+            pass
+        abort(500, "La génération de la vidéo a échoué.")
+    
+    # Nettoyer le fichier de sous-titres temporaire après usage
+    try:
+        os.remove(subtitle_path)
+    except OSError as e:
+        app.logger.warning(f"Impossible de supprimer le fichier .ass temporaire: {e}")
+    
+    # Envoyer la vidéo générée au client
+    return send_file(output_video, mimetype="video/mp4")
 
-    ass_stat = os.stat(ass_path)
-    print(f"Permissions du fichier ASS : {oct(ass_stat.st_mode)}")
+def generate_ass_from_text(text):
+    # Génère un contenu de fichier .ass basique avec le texte donné.
+    return "[Script Info]\nScriptType: v4.00+\nPlayResX: 1280\nPlayResY: 720\n\n" \
+           "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, " \
+           "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, " \
+           "Spacing, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n" \
+           "Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,1,3,0,2,10,10,10,1\n\n" \
+           "[Events]\nFormat: Layer, Start, End, Style, Text\n" \
+           f"Dialogue: 0,0:00:01.00,0:00:05.00,Default,,{text}\n"
 
-    os.chown(ass_path, 33, 33)
-    os.chmod(ass_path, 0o777)
 
-    ffmpeg_test = subprocess.run([
-        'ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=s=1280x720:d=1', '-vf', f'subtitles={os.path.abspath(ass_path)}', '-f', 'null', '-'
-    ], capture_output=True, text=True)
-
-    if ffmpeg_test.returncode != 0:
-        print("Erreur FFmpeg lors de la lecture du fichier ASS :")
-        print(ffmpeg_test.stderr)
-        return jsonify({'error': 'FFmpeg cannot read subtitle file'}), 500
-
-    output_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.mp4")
-    generate_video_with_subtitles(image_paths, wav_path, ass_path, output_path, orientation)
-
-    if not os.path.exists(output_path):
-        print(f"Erreur : La vidéo {output_path} n'a pas été créée.")
-        return jsonify({'error': 'Video file not created'}), 500
-
-    return send_file(output_path, as_attachment=True)
 
 def generate_animated_ass_subtitles(transcription_data, ass_path, default_color="&HFFFFFF&", orientation="landscape"):
     subs = pysubs2.SSAFile()
