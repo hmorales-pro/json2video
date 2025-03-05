@@ -247,7 +247,7 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
 
 @app.route('/outputs/<path:filename>')
 def serve_output(filename):
-    return send_from_directory(OUTPUT_FOLDER, filename)
+    return send_from_directory(OUTPUT_FOLDER, filename, mimetype='video/mp4')
 
 
 @app.route('/')
