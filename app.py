@@ -172,12 +172,15 @@ def merge_audio_and_video(video_path, audio_path, output_path):
         'ffmpeg', '-y',
         '-i', video_path,
         '-i', audio_path,
-        '-c:v', 'copy',
-        '-c:a', 'aac',
+        '-c:v', 'libx264',       # Re-encoder en H264
+        '-preset', 'veryfast',
+        '-crf', '23',
+        '-c:a', 'aac',           # Audio en AAC
         '-shortest',
         output_path
     ]
     subprocess.run(cmd, check=True)
+
 
 def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, output_path, fps=24,
                                          font_path="DejaVuSans.ttf", font_size=44):
@@ -247,7 +250,7 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
 
 @app.route('/outputs/<path:filename>')
 def serve_output(filename):
-    return send_from_directory(OUTPUT_FOLDER, filename, mimetype='video/mp4')
+    return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True, mimetype='video/mp4')
 
 
 @app.route('/')
