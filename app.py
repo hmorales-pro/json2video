@@ -230,17 +230,17 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
             except IOError:
                 print(f"Erreur: police '{font_path}' non trouvée pour le dimensionnement. Utilisation de la police par défaut.")
                 font_pil = ImageFont.load_default()
-            # Utiliser textbbox pour obtenir les dimensions du texte
             bbox = draw_dummy.textbbox((0, 0), current_subtitle, font=font_pil)
             text_w = bbox[2] - bbox[0]
             text_h = bbox[3] - bbox[1]
             text_x = (width - text_w) // 2
-            text_y = height - offset_y - text_h
+            text_y = (height - text_h) // 2  # Centre vertical
             frame = draw_text_pil(frame, current_subtitle, text_x, text_y,
-                                  font_path=font_path, font_size=font_size,
-                                  text_color=(255, 255, 255), stroke_color=(0, 0, 0),
-                                  stroke_width=2)
+                                font_path=font_path, font_size=font_size,
+                                text_color=(255, 255, 255), stroke_color=(0, 0, 0),
+                                stroke_width=2)
         out.write(frame)
+
     out.release()
     merge_audio_and_video(silent_video_path, audio_path, output_path)
     if os.path.exists(silent_video_path):
