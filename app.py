@@ -222,30 +222,94 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
                 current_subtitle = text
                 break
 
-        if current_subtitle:
-            dummy_img = Image.new("RGB", (width, height))
-            draw_dummy = ImageDraw.Draw(dummy_img)
-            try:
-                font_pil = ImageFont.truetype(font_path, font_size)
-            except IOError:
-                print(f"Erreur: police '{font_path}' non trouvée pour le dimensionnement. Utilisation de la police par défaut.")
-                font_pil = ImageFont.load_default()
-            bbox = draw_dummy.textbbox((0, 0), current_subtitle, font=font_pil)
-            text_w = bbox[2] - bbox[0]
-            text_h = bbox[3] - bbox[1]
-            text_x = (width - text_w) // 2
-            text_y = (height - text_h) // 2  # Centre vertical
-            frame = draw_text_pil(frame, current_subtitle, text_x, text_y,
-                                font_path=font_path, font_size=font_size,
-                                text_color=(255, 255, 255), stroke_color=(0, 0, 0),
-                                stroke_width=2)
+        # Dans la boucle, après avoir trouvé current_subtitle :
+    if current_subtitle:
+        dummy_img = Image.new("RGB", (width, height))
+        draw_dummy = ImageDraw.Draw(dummy_img)
+        try:
+            font_pil = ImageFont.truetype(font_path, font_size)
+        except IOError:
+            print(f"Erreur: police '{font_path}' non trouvée pour le dimensionnement. Utilisation de la police par défaut.")
+            font_pil = ImageFont.load_default()
+        
+        # Largeur max pour le texte (ex. 80% de la largeur)
+        max_text_width = int(width * 0.8)
+        
+        # Découpe en lignes
+        lines = wrap_text_by_width(draw_dummy, current_subtitle, font_pil, max_text_width)
+        
+        # Calculer la hauteur totale pour toutes les lignes
+        total_text_height = 0
+        line_heights = []
+        for line in lines:
+            bbox_line = draw_dummy.textbbox((0, 0), line, font=font_pil)
+            line_height = bbox_line[3] - bbox_line[1]
+            line_heights.append(line_height)
+            total_text_height += line_height
+        
+        # Point de départ pour dessiner (centrage vertical)
+        current_y = (height - total_text_height) // 2
+        
+        # Dessin de chaque ligne
+        for i, line in enumerate(lines):
+            bbox_line = draw_dummy.textbbox((0, 0), line, font=font_pil)
+            line_w = bbox_line[2] - bbox_line[0]
+            line_h = line_heights[i]
+            
+            # Centrage horizontal
+            text_x = (width - line_w) // 2
+            
+            # Dessin (via draw_text_pil) de la ligne
+            frame = draw_text_pil(
+                frame, 
+                line, 
+                text_x, 
+                current_y, 
+                font_path=font_path, 
+                font_size=font_size,
+                text_color=(255, 255, 255), 
+                stroke_color=(0, 0, 0),
+                stroke_width=2
+            )
+            # Décaler vers le bas pour la prochaine ligne
+            current_y += line_h
         out.write(frame)
 
     out.release()
+
     merge_audio_and_video(silent_video_path, audio_path, output_path)
     if os.path.exists(silent_video_path):
         os.remove(silent_video_path)
     print(f"Vidéo finale générée : {output_path}")
+
+def wrap_text_by_width(draw, text, font, max_width):
+    """
+    Découpe `text` en plusieurs lignes pour qu'aucune ne dépasse `max_width`.
+    Retourne une liste de lignes.
+    """
+    words = text.split()
+    lines = []
+    current_line = []
+
+    for word in words:
+        # Tester la largeur si on ajoute ce `word` à la ligne courante
+        test_line = ' '.join(current_line + [word])
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        line_width = bbox[2] - bbox[0]
+
+        if line_width <= max_width:
+            # OK, on ajoute ce mot à la ligne
+            current_line.append(word)
+        else:
+            # On fige la ligne courante, et on démarre une nouvelle
+            lines.append(' '.join(current_line))
+            current_line = [word]
+
+    # Ajouter la dernière ligne si non vide
+    if current_line:
+        lines.append(' '.join(current_line))
+
+    return lines
 
 
 @app.route('/outputs/<path:filename>')
