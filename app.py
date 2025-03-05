@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, send_from_directory
 import os
 import uuid
 import subprocess
@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 from google.cloud import speech
 from pydub import AudioSegment
 import tempfile
-from flask import send_from_directory
 
 # Charger les variables d'environnement
 load_dotenv()
@@ -21,7 +20,6 @@ OUTPUT_FOLDER = "outputs"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# Assurez-vous que la clé API Google est configurée
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
 def parse_time(time_str):
@@ -181,9 +179,34 @@ def merge_audio_and_video(video_path, audio_path, output_path):
     ]
     subprocess.run(cmd, check=True)
 
+def wrap_text_by_width(draw, text, font, max_width):
+    """
+    Découpe `text` en plusieurs lignes pour qu'aucune ne dépasse `max_width`.
+    Retourne une liste de lignes.
+    """
+    words = text.split()
+    lines = []
+    current_line = []
 
-def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, output_path, fps=24,
-                                         font_path="DejaVuSans.ttf", font_size=24):
+    for word in words:
+        test_line = ' '.join(current_line + [word])
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        line_width = bbox[2] - bbox[0]
+
+        if line_width <= max_width:
+            current_line.append(word)
+        else:
+            # On fige la ligne courante, et on démarre une nouvelle
+            lines.append(' '.join(current_line))
+            current_line = [word]
+
+    if current_line:
+        lines.append(' '.join(current_line))
+
+    return lines
+
+def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, output_path,
+                                         fps=24, font_path="DejaVuSans.ttf", font_size=24):
     subtitles = read_srt(srt_path)
     audio = AudioSegment.from_file(audio_path)
     total_duration_ms = len(audio)
@@ -201,19 +224,22 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
     silent_video_path = output_path.replace('.mp4', '_silent.mp4')
     out = cv2.VideoWriter(silent_video_path, fourcc, fps, (width, height))
 
+    # Prépare la liste de frames
     frames_list = []
     for img_path in image_paths:
         img_original = cv2.imread(img_path)
         frames_for_this_image = int(segment_duration_sec * fps)
         for _ in range(frames_for_this_image):
             frames_list.append(img_original.copy())
+
+    # Ajuste si trop ou pas assez de frames
     if len(frames_list) < total_frames:
         while len(frames_list) < total_frames:
             frames_list.append(img_original.copy())
     elif len(frames_list) > total_frames:
         frames_list = frames_list[:total_frames]
 
-    offset_y = 50  # marge depuis le bas
+    # Pour chaque frame, on cherche le sous-titre correspondant, on le découpe en lignes, on dessine
     for frame_index, frame in enumerate(frames_list):
         current_time = frame_index / fps
         current_subtitle = None
@@ -222,106 +248,77 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
                 current_subtitle = text
                 break
 
-        # Dans la boucle, après avoir trouvé current_subtitle :
-    if current_subtitle:
-        dummy_img = Image.new("RGB", (width, height))
-        draw_dummy = ImageDraw.Draw(dummy_img)
-        try:
-            font_pil = ImageFont.truetype(font_path, font_size)
-        except IOError:
-            print(f"Erreur: police '{font_path}' non trouvée pour le dimensionnement. Utilisation de la police par défaut.")
-            font_pil = ImageFont.load_default()
-        
-        # Largeur max pour le texte (ex. 80% de la largeur)
-        max_text_width = int(width * 0.8)
-        
-        # Découpe en lignes
-        lines = wrap_text_by_width(draw_dummy, current_subtitle, font_pil, max_text_width)
-        
-        # Calculer la hauteur totale pour toutes les lignes
-        total_text_height = 0
-        line_heights = []
-        for line in lines:
-            bbox_line = draw_dummy.textbbox((0, 0), line, font=font_pil)
-            line_height = bbox_line[3] - bbox_line[1]
-            line_heights.append(line_height)
-            total_text_height += line_height
-        
-        # Point de départ pour dessiner (centrage vertical)
-        current_y = (height - total_text_height) // 2
-        
-        # Dessin de chaque ligne
-        for i, line in enumerate(lines):
-            bbox_line = draw_dummy.textbbox((0, 0), line, font=font_pil)
-            line_w = bbox_line[2] - bbox_line[0]
-            line_h = line_heights[i]
-            
-            # Centrage horizontal
-            text_x = (width - line_w) // 2
-            
-            # Dessin (via draw_text_pil) de la ligne
-            frame = draw_text_pil(
-                frame, 
-                line, 
-                text_x, 
-                current_y, 
-                font_path=font_path, 
-                font_size=font_size,
-                text_color=(255, 255, 255), 
-                stroke_color=(0, 0, 0),
-                stroke_width=2
-            )
-            # Décaler vers le bas pour la prochaine ligne
-            current_y += line_h
+        if current_subtitle:
+            dummy_img = Image.new("RGB", (width, height))
+            draw_dummy = ImageDraw.Draw(dummy_img)
+            try:
+                font_pil = ImageFont.truetype(font_path, font_size)
+            except IOError:
+                print(f"Erreur: police '{font_path}' non trouvée pour le dimensionnement. Utilisation de la police par défaut.")
+                font_pil = ImageFont.load_default()
+
+            max_text_width = int(width * 0.8)
+            lines = wrap_text_by_width(draw_dummy, current_subtitle, font_pil, max_text_width)
+
+            # Calculer la hauteur totale de toutes les lignes
+            total_text_height = 0
+            line_heights = []
+            for line in lines:
+                bbox_line = draw_dummy.textbbox((0, 0), line, font=font_pil)
+                line_height = bbox_line[3] - bbox_line[1]
+                line_heights.append(line_height)
+                total_text_height += line_height
+
+            # Centrage vertical (au milieu). 
+            # Si tu préfères en bas, fais: current_y = height - offset_y - total_text_height
+            current_y = (height - total_text_height) // 2
+
+            # Dessin de chaque ligne
+            for i, one_line in enumerate(lines):
+                bbox_line = draw_dummy.textbbox((0, 0), one_line, font=font_pil)
+                line_w = bbox_line[2] - bbox_line[0]
+                line_h = line_heights[i]
+
+                # Centrage horizontal
+                text_x = (width - line_w) // 2
+
+                # Dessin sur la frame
+                frame = draw_text_pil(
+                    frame,
+                    one_line,
+                    text_x,
+                    current_y,
+                    font_path=font_path,
+                    font_size=font_size,
+                    text_color=(255, 255, 255),
+                    stroke_color=(0, 0, 0),
+                    stroke_width=2
+                )
+
+                # Décaler vers le bas pour la prochaine ligne
+                current_y += line_h
+
+        # On écrit la frame, qu'il y ait un sous-titre ou non
         out.write(frame)
 
     out.release()
 
+    # Fusion audio + vidéo
     merge_audio_and_video(silent_video_path, audio_path, output_path)
     if os.path.exists(silent_video_path):
         os.remove(silent_video_path)
+
     print(f"Vidéo finale générée : {output_path}")
-
-def wrap_text_by_width(draw, text, font, max_width):
-    """
-    Découpe `text` en plusieurs lignes pour qu'aucune ne dépasse `max_width`.
-    Retourne une liste de lignes.
-    """
-    words = text.split()
-    lines = []
-    current_line = []
-
-    for word in words:
-        # Tester la largeur si on ajoute ce `word` à la ligne courante
-        test_line = ' '.join(current_line + [word])
-        bbox = draw.textbbox((0, 0), test_line, font=font)
-        line_width = bbox[2] - bbox[0]
-
-        if line_width <= max_width:
-            # OK, on ajoute ce mot à la ligne
-            current_line.append(word)
-        else:
-            # On fige la ligne courante, et on démarre une nouvelle
-            lines.append(' '.join(current_line))
-            current_line = [word]
-
-    # Ajouter la dernière ligne si non vide
-    if current_line:
-        lines.append(' '.join(current_line))
-
-    return lines
-
 
 @app.route('/outputs/<path:filename>')
 def serve_output(filename):
+    # On force le téléchargement ou la lecture en tant que vidéo mp4
     return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True, mimetype='video/mp4')
-
 
 @app.route('/')
 def index():
     return 'Le serveur Flask fonctionne correctement !'
 
-@app.route('/generate-video', methods=['POST'])
 @app.route('/generate-video', methods=['POST'])
 def generate_video_endpoint():
     print("Fichiers reçus :", request.files.keys())
@@ -354,7 +351,10 @@ def generate_video_endpoint():
     generate_srt_subtitles(transcription_data, srt_path)
 
     output_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.mp4")
-    generate_video_with_subtitles_opencv(image_paths, wav_path, srt_path, output_path)
+    generate_video_with_subtitles_opencv(image_paths, wav_path, srt_path, output_path,
+                                         fps=24,
+                                         font_path="DejaVuSans.ttf",
+                                         font_size=48)  # <--- Augmente la taille de la police si tu veux
 
     if not os.path.exists(output_path):
         print(f"Erreur : La vidéo {output_path} n'a pas été créée.")
@@ -362,7 +362,6 @@ def generate_video_endpoint():
 
     # Construire l'URL de téléchargement
     filename = os.path.basename(output_path)
-    # request.host_url renvoie par exemple "http://127.0.0.1:5001/"
     file_url = request.host_url + 'outputs/' + filename
 
     return jsonify({'url': file_url})
