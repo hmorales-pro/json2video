@@ -4,11 +4,12 @@ import uuid
 import subprocess
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 from google.cloud import speech
 from pydub import AudioSegment
 import tempfile
+from flask import send_from_directory
 
 # Charger les variables d'environnement
 load_dotenv()
@@ -24,69 +25,30 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
 def parse_time(time_str):
-    """
-    Convertit un timestamp SRT (HH:MM:SS,mmm) en nombre de secondes (float).
-    """
     hours, minutes, seconds_millis = time_str.split(':')
     seconds, millis = seconds_millis.split(',')
-    total_seconds = (int(hours) * 3600
-                     + int(minutes) * 60
-                     + int(seconds)
-                     + int(millis) / 1000.0)
+    total_seconds = int(hours) * 3600 + int(minutes) * 60 + int(seconds) + int(millis) / 1000.0
     return total_seconds
 
 def read_srt(srt_path):
-    """
-    Lit un fichier SRT et retourne une liste de tuples (start, end, text).
-    """
     subtitles = []
     with open(srt_path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
-
-    current_sub = {
-        "start_time": None,
-        "end_time": None,
-        "text": ""
-    }
-
+    current_sub = {"start_time": None, "end_time": None, "text": ""}
     for line in lines:
         line = line.strip()
-
-        # Numéro de sous-titre
         if line.isdigit():
-            # Si on avait un bloc en cours, on l'ajoute à la liste
             if current_sub["start_time"] is not None:
-                subtitles.append((
-                    current_sub["start_time"],
-                    current_sub["end_time"],
-                    current_sub["text"].strip()
-                ))
-            # On réinitialise pour le nouveau bloc
-            current_sub = {
-                "start_time": None,
-                "end_time": None,
-                "text": ""
-            }
-
-        # Ligne qui contient --> (ex: "00:00:01,000 --> 00:00:03,000")
+                subtitles.append((current_sub["start_time"], current_sub["end_time"], current_sub["text"].strip()))
+            current_sub = {"start_time": None, "end_time": None, "text": ""}
         elif '-->' in line:
             start, end = line.split('-->')
             current_sub["start_time"] = parse_time(start.strip())
-            current_sub["end_time"]   = parse_time(end.strip())
-
-        # Texte du sous-titre
+            current_sub["end_time"] = parse_time(end.strip())
         elif line:
-            # On ajoute la ligne de texte (ici en concaténant sur une seule ligne)
             current_sub["text"] += ' ' + line
-
-    # Ajouter le dernier bloc si existant
     if current_sub["start_time"] is not None:
-        subtitles.append((
-            current_sub["start_time"],
-            current_sub["end_time"],
-            current_sub["text"].strip()
-        ))
-
+        subtitles.append((current_sub["start_time"], current_sub["end_time"], current_sub["text"].strip()))
     return subtitles
 
 def resize_and_validate_images(image_paths, orientation='landscape'):
@@ -137,7 +99,6 @@ def transcribe_audio_in_chunks(audio_path, chunk_duration_ms=30000):
 
         try:
             response = client.recognize(config=config, audio=audio)
-
             for result in response.results:
                 for word_info in result.alternatives[0].words:
                     transcription_data.append({
@@ -153,7 +114,6 @@ def transcribe_audio_in_chunks(audio_path, chunk_duration_ms=30000):
     return transcription_data
 
 def generate_srt_subtitles(transcription_data, srt_path):
-    # Grouper les mots en phrases
     phrases = []
     current_phrase = []
     current_start = None
@@ -161,10 +121,7 @@ def generate_srt_subtitles(transcription_data, srt_path):
     for word_info in transcription_data:
         if not current_start:
             current_start = word_info['start']
-        
         current_phrase.append(word_info['word'])
-        
-        # Séparer les phrases tous les 5-6 mots ou si pause détectée
         if len(current_phrase) >= 5 or (word_info.get('pause', False)):
             phrases.append({
                 'start': current_start,
@@ -174,7 +131,6 @@ def generate_srt_subtitles(transcription_data, srt_path):
             current_phrase = []
             current_start = None
     
-    # Ajouter la dernière phrase si nécessaire
     if current_phrase:
         phrases.append({
             'start': current_start,
@@ -182,10 +138,8 @@ def generate_srt_subtitles(transcription_data, srt_path):
             'text': ' '.join(current_phrase)
         })
     
-    # Écrire le fichier SRT
     with open(srt_path, 'w', encoding='utf-8') as srt_file:
         for i, phrase in enumerate(phrases, start=1):
-            # Format du timestamp pour SRT
             def format_timestamp(seconds):
                 hours = int(seconds // 3600)
                 minutes = int((seconds % 3600) // 60)
@@ -199,68 +153,66 @@ def generate_srt_subtitles(transcription_data, srt_path):
     
     print(f"Fichier SRT généré : {srt_path}")
 
-def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, output_path, fps=24):
-    """
-    1) Lit les sous-titres SRT et l'audio (pour sa durée).
-    2) Répartit les images sur la durée totale de l'audio.
-    3) Crée une liste de frames (en copiant l'image à chaque fois).
-    4) Incruste les sous-titres dans les frames.
-    5) Écrit une vidéo muette (silent_video.mp4).
-    6) Fusionne ensuite l'audio et la vidéo pour produire output_path.
-    """
-    # --- 1) Lire les sous-titres et l'audio
+def draw_text_pil(frame, text, x, y, font_path="DejaVuSans.ttf", font_size=48,
+                  text_color=(255, 255, 255), stroke_color=(0, 0, 0), stroke_width=2):
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    pil_image = Image.fromarray(frame_rgb)
+    draw = ImageDraw.Draw(pil_image)
+    try:
+        font = ImageFont.truetype(font_path, font_size)
+    except IOError:
+        print(f"Erreur: police '{font_path}' non trouvée. Utilisation de la police par défaut.")
+        font = ImageFont.load_default()
+    draw.text((x, y), text, font=font, fill=text_color, stroke_width=stroke_width, stroke_fill=stroke_color)
+    frame_bgr = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+    return frame_bgr
+
+def merge_audio_and_video(video_path, audio_path, output_path):
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', video_path,
+        '-i', audio_path,
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-shortest',
+        output_path
+    ]
+    subprocess.run(cmd, check=True)
+
+def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, output_path, fps=24,
+                                         font_path="DejaVuSans.ttf", font_size=44):
     subtitles = read_srt(srt_path)
-    audio = AudioSegment.from_file(audio_path)  # WAV, MP3, etc.
+    audio = AudioSegment.from_file(audio_path)
     total_duration_ms = len(audio)
     total_duration_sec = total_duration_ms / 1000.0
 
-    # --- 2) Calculer le nombre de frames total et la répartition
-    total_frames = int(total_duration_sec * fps)
     if not image_paths:
-        raise ValueError("Aucune image fournie dans image_paths.")
-    segment_duration_sec = total_duration_sec / len(image_paths)
-
-    # --- 3) Déterminer la taille de la vidéo à partir de la première image
+        raise ValueError("Aucune image fournie.")
     first_img = cv2.imread(image_paths[0])
     height, width, _ = first_img.shape
 
-    # Préparer l'écriture d'une vidéo muette (temporaire)
+    total_frames = int(total_duration_sec * fps)
+    segment_duration_sec = total_duration_sec / len(image_paths)
+
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     silent_video_path = output_path.replace('.mp4', '_silent.mp4')
     out = cv2.VideoWriter(silent_video_path, fourcc, fps, (width, height))
 
-    # Générer la liste de frames (copie par frame pour éviter que le texte reste incrusté)
     frames_list = []
     for img_path in image_paths:
         img_original = cv2.imread(img_path)
-        # Si nécessaire, on peut redimensionner ici :
-        # img_original = cv2.resize(img_original, (width, height), interpolation=cv2.INTER_AREA)
-
-        # Nombre de frames à générer pour cette image
         frames_for_this_image = int(segment_duration_sec * fps)
-
         for _ in range(frames_for_this_image):
             frames_list.append(img_original.copy())
-
-    # Ajuster si on n'a pas exactement total_frames
     if len(frames_list) < total_frames:
-        # On complète avec la dernière image
         while len(frames_list) < total_frames:
             frames_list.append(img_original.copy())
     elif len(frames_list) > total_frames:
-        # On tronque
         frames_list = frames_list[:total_frames]
 
-    # --- 4) Incruster les sous-titres sur chaque frame
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 1
-    font_thickness = 2
-    font_color = (255, 255, 255)  # blanc
     offset_y = 50  # marge depuis le bas
-
     for frame_index, frame in enumerate(frames_list):
-        current_time = frame_index / fps  # temps en secondes
-        # Chercher le sous-titre à afficher
+        current_time = frame_index / fps
         current_subtitle = None
         for start, end, text in subtitles:
             if start <= current_time < end:
@@ -268,52 +220,41 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
                 break
 
         if current_subtitle:
-            # Calculer la position X pour centrer
-            text_size = cv2.getTextSize(current_subtitle, font, font_scale, font_thickness)[0]
-            text_x = (width - text_size[0]) // 2
-            text_y = height - offset_y
-
-            # Dessiner un contour noir plus épais
-            cv2.putText(frame, current_subtitle, (text_x, text_y),
-                        font, font_scale, (0, 0, 0), font_thickness + 2)
-            # Dessiner le texte en blanc
-            cv2.putText(frame, current_subtitle, (text_x, text_y),
-                        font, font_scale, font_color, font_thickness)
-
-        # Écrire la frame dans la vidéo muette
+            dummy_img = Image.new("RGB", (width, height))
+            draw_dummy = ImageDraw.Draw(dummy_img)
+            try:
+                font_pil = ImageFont.truetype(font_path, font_size)
+            except IOError:
+                print(f"Erreur: police '{font_path}' non trouvée pour le dimensionnement. Utilisation de la police par défaut.")
+                font_pil = ImageFont.load_default()
+            # Utiliser textbbox pour obtenir les dimensions du texte
+            bbox = draw_dummy.textbbox((0, 0), current_subtitle, font=font_pil)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+            text_x = (width - text_w) // 2
+            text_y = height - offset_y - text_h
+            frame = draw_text_pil(frame, current_subtitle, text_x, text_y,
+                                  font_path=font_path, font_size=font_size,
+                                  text_color=(255, 255, 255), stroke_color=(0, 0, 0),
+                                  stroke_width=2)
         out.write(frame)
-
-    out.release()  # fermeture de la vidéo muette
-
-    # --- 5) Fusionner la vidéo muette et l'audio
+    out.release()
     merge_audio_and_video(silent_video_path, audio_path, output_path)
-
-    # (Optionnel) On peut supprimer la vidéo muette temporaire
     if os.path.exists(silent_video_path):
         os.remove(silent_video_path)
-
     print(f"Vidéo finale générée : {output_path}")
 
-def merge_audio_and_video(video_path, audio_path, output_path):
-    """
-    Fusionne la vidéo muette (video_path) et l'audio (audio_path) dans output_path
-    en utilisant ffmpeg. Conserve la piste vidéo telle quelle et encode l'audio en AAC.
-    """
-    cmd = [
-        'ffmpeg', '-y',
-        '-i', video_path,
-        '-i', audio_path,
-        '-c:v', 'copy',
-        '-c:a', 'aac',
-        '-shortest',  # coupe si l'audio est plus long que la vidéo
-        output_path
-    ]
-    subprocess.run(cmd, check=True)
+
+@app.route('/outputs/<path:filename>')
+def serve_output(filename):
+    return send_from_directory(OUTPUT_FOLDER, filename)
+
 
 @app.route('/')
 def index():
     return 'Le serveur Flask fonctionne correctement !'
 
+@app.route('/generate-video', methods=['POST'])
 @app.route('/generate-video', methods=['POST'])
 def generate_video_endpoint():
     print("Fichiers reçus :", request.files.keys())
@@ -352,7 +293,12 @@ def generate_video_endpoint():
         print(f"Erreur : La vidéo {output_path} n'a pas été créée.")
         return jsonify({'error': 'Video file not created'}), 500
 
-    return send_file(output_path, as_attachment=True)
+    # Construire l'URL de téléchargement
+    filename = os.path.basename(output_path)
+    # request.host_url renvoie par exemple "http://127.0.0.1:5001/"
+    file_url = request.host_url + 'outputs/' + filename
+
+    return jsonify({'url': file_url})
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
