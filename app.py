@@ -153,7 +153,7 @@ def generate_srt_subtitles(transcription_data, srt_path):
     
     print(f"Fichier SRT généré : {srt_path}")
 
-def draw_text_pil(frame, text, x, y, font_path="DejaVuSans.ttf", font_size=48,
+def draw_text_pil(frame, text, x, y, font_path="DejaVuSans.ttf", font_size=24,
                   text_color=(255, 255, 255), stroke_color=(0, 0, 0), stroke_width=2):
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     pil_image = Image.fromarray(frame_rgb)
@@ -183,7 +183,7 @@ def merge_audio_and_video(video_path, audio_path, output_path):
 
 
 def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, output_path, fps=24,
-                                         font_path="DejaVuSans.ttf", font_size=44):
+                                         font_path="DejaVuSans.ttf", font_size=24):
     subtitles = read_srt(srt_path)
     audio = AudioSegment.from_file(audio_path)
     total_duration_ms = len(audio)
