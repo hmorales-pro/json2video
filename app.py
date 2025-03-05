@@ -151,14 +151,15 @@ def generate_srt_subtitles(transcription_data, srt_path):
     
     print(f"Fichier SRT généré : {srt_path}")
 
-def draw_text_pil(frame, text, x, y, font_path="DejaVuSans.ttf", font_size=24,
-                  text_color=(255, 255, 255), stroke_color=(0, 0, 0), stroke_width=2,
+def draw_text_pil(frame, text, x, y,
+                  font_path="DejaVuSans.ttf", font_size=24,
+                  text_color=(255, 255, 255),
+                  stroke_color=(0, 0, 0), stroke_width=2,
                   bg_color=None, padding=5):
     """
-    Dessine le texte sur une frame en utilisant Pillow.
-    Si bg_color est défini, un rectangle de fond (avec padding) sera dessiné derrière le texte.
+    Dessine du texte (UNE SEULE LIGNE) sur `frame` (OpenCV) via Pillow.
+    Si bg_color est défini, un rectangle de fond est dessiné derrière cette ligne.
     """
-    # Convertir l'image de BGR (OpenCV) à RGB (Pillow)
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     pil_image = Image.fromarray(frame_rgb)
     draw = ImageDraw.Draw(pil_image)
@@ -169,35 +170,31 @@ def draw_text_pil(frame, text, x, y, font_path="DejaVuSans.ttf", font_size=24,
         print(f"Erreur: police '{font_path}' non trouvée. Utilisation de la police par défaut.")
         font = ImageFont.load_default()
     
-    # Si bg_color est défini, dessiner un rectangle de fond derrière le texte
+    # Si bg_color, on dessine un rectangle autour du texte (cette ligne seulement)
     if bg_color is not None:
-        # On calcule la bounding box du texte, en prenant en compte le stroke_width
         bbox = draw.textbbox((x, y), text, font=font, stroke_width=stroke_width)
-        # On ajoute du padding autour
         bg_x0 = bbox[0] - padding
         bg_y0 = bbox[1] - padding
         bg_x1 = bbox[2] + padding
         bg_y1 = bbox[3] + padding
         draw.rectangle([bg_x0, bg_y0, bg_x1, bg_y1], fill=bg_color)
     
-    # Dessiner le texte (avec contour)
+    # Dessin du texte (avec contour)
     draw.text((x, y), text, font=font, fill=text_color,
               stroke_width=stroke_width, stroke_fill=stroke_color)
     
-    # Convertir l'image de nouveau en BGR pour OpenCV
     frame_bgr = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
     return frame_bgr
-
 
 def merge_audio_and_video(video_path, audio_path, output_path):
     cmd = [
         'ffmpeg', '-y',
         '-i', video_path,
         '-i', audio_path,
-        '-c:v', 'libx264',       # Re-encoder en H264
+        '-c:v', 'libx264',  # Re-encoder en H264
         '-preset', 'veryfast',
         '-crf', '23',
-        '-c:a', 'aac',           # Audio en AAC
+        '-c:a', 'aac',      # Audio en AAC
         '-shortest',
         output_path
     ]
@@ -220,7 +217,6 @@ def wrap_text_by_width(draw, text, font, max_width):
         if line_width <= max_width:
             current_line.append(word)
         else:
-            # On fige la ligne courante, et on démarre une nouvelle
             lines.append(' '.join(current_line))
             current_line = [word]
 
@@ -263,7 +259,6 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
     elif len(frames_list) > total_frames:
         frames_list = frames_list[:total_frames]
 
-    # Pour chaque frame, on cherche le sous-titre correspondant, on le découpe en lignes, on dessine
     for frame_index, frame in enumerate(frames_list):
         current_time = frame_index / fps
         current_subtitle = None
@@ -273,56 +268,76 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
                 break
 
         if current_subtitle:
+            # 1) On crée une image PIL "dummy" juste pour mesurer
             dummy_img = Image.new("RGB", (width, height))
             draw_dummy = ImageDraw.Draw(dummy_img)
             try:
                 font_pil = ImageFont.truetype(font_path, font_size)
             except IOError:
-                print(f"Erreur: police '{font_path}' non trouvée pour le dimensionnement. Utilisation de la police par défaut.")
+                print(f"Erreur: police '{font_path}' non trouvée. Utilisation de la police par défaut.")
                 font_pil = ImageFont.load_default()
 
+            # 2) On découpe en lignes
             max_text_width = int(width * 0.8)
             lines = wrap_text_by_width(draw_dummy, current_subtitle, font_pil, max_text_width)
 
-            # Calculer la hauteur totale de toutes les lignes
+            # 3) Calculer la largeur et la hauteur totales du bloc
+            max_line_width = 0
             total_text_height = 0
             line_heights = []
-            for line in lines:
-                bbox_line = draw_dummy.textbbox((0, 0), line, font=font_pil)
-                line_height = bbox_line[3] - bbox_line[1]
-                line_heights.append(line_height)
-                total_text_height += line_height
+            for ln in lines:
+                bbox_ln = draw_dummy.textbbox((0, 0), ln, font=font_pil)
+                ln_width = bbox_ln[2] - bbox_ln[0]
+                ln_height = bbox_ln[3] - bbox_ln[1]
+                max_line_width = max(max_line_width, ln_width)
+                line_heights.append(ln_height)
+                total_text_height += ln_height
 
-            # Centrage vertical (au milieu). 
-            # Si tu préfères en bas, fais: current_y = height - offset_y - total_text_height
-            current_y = (height - total_text_height) // 2
+            # 4) Coordonnées pour centrer le bloc
+            #    (ici, centré en plein milieu. Ajuste si tu préfères en bas.)
+            block_x_center = width // 2
+            block_y_center = height // 2
 
-            # Dessin de chaque ligne
-            for i, one_line in enumerate(lines):
-                bbox_line = draw_dummy.textbbox((0, 0), one_line, font=font_pil)
-                line_w = bbox_line[2] - bbox_line[0]
-                line_h = line_heights[i]
+            # 5) Définir un "padding" autour du bloc (pour le rectangle noir)
+            block_padding = 20
 
-                # Centrage horizontal
-                text_x = (width - line_w) // 2
+            # 6) Calculer la bounding box du bloc
+            block_left   = block_x_center - (max_line_width // 2) - block_padding
+            block_top    = block_y_center - (total_text_height // 2) - block_padding
+            block_right  = block_x_center + (max_line_width // 2) + block_padding
+            block_bottom = block_y_center + (total_text_height // 2) + block_padding
 
-                # Dessin sur la frame
-                frame = draw_text_pil(
-                    frame,
-                    one_line,
-                    text_x,
-                    current_y,
-                    font_path=font_path,
-                    font_size=font_size,
-                    text_color=(255, 255, 255),
-                    stroke_color=(0, 0, 0),
-                    stroke_width=2
+            # 7) Dessiner le rectangle noir (bloc global) en Pillow
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(frame_rgb)
+            draw = ImageDraw.Draw(pil_image)
+            draw.rectangle([block_left, block_top, block_right, block_bottom], fill=(0, 0, 0))
+
+            # 8) Dessiner chaque ligne de texte dans ce bloc
+            current_y = block_top + block_padding
+            for i, ln in enumerate(lines):
+                ln_height = line_heights[i]
+                line_x = block_x_center - (max_line_width // 2)
+                # Mesure la largeur réelle de cette ligne
+                bbox_ln = draw.textbbox((0, 0), ln, font=font_pil)
+                real_line_width = bbox_ln[2] - bbox_ln[0]
+                # On recalcule pour la centrer dans le bloc
+                line_x = block_x_center - (real_line_width // 2)
+
+                # Dessin du texte (avec contour)
+                draw.text(
+                    (line_x, current_y),
+                    ln,
+                    font=font_pil,
+                    fill=(255, 255, 255),        # texte blanc
+                    stroke_width=2,
+                    stroke_fill=(0, 0, 0)       # contour noir
                 )
+                current_y += ln_height
 
-                # Décaler vers le bas pour la prochaine ligne
-                current_y += line_h
+            # 9) Convertir PIL -> BGR pour OpenCV
+            frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
-        # On écrit la frame, qu'il y ait un sous-titre ou non
         out.write(frame)
 
     out.release()
@@ -378,7 +393,7 @@ def generate_video_endpoint():
     generate_video_with_subtitles_opencv(image_paths, wav_path, srt_path, output_path,
                                          fps=24,
                                          font_path="DejaVuSans.ttf",
-                                         font_size=48)  # <--- Augmente la taille de la police si tu veux
+                                         font_size=48)  # Augmente la taille de la police si tu veux
 
     if not os.path.exists(output_path):
         print(f"Erreur : La vidéo {output_path} n'a pas été créée.")
