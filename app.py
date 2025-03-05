@@ -152,18 +152,42 @@ def generate_srt_subtitles(transcription_data, srt_path):
     print(f"Fichier SRT généré : {srt_path}")
 
 def draw_text_pil(frame, text, x, y, font_path="DejaVuSans.ttf", font_size=24,
-                  text_color=(255, 255, 255), stroke_color=(0, 0, 0), stroke_width=2):
+                  text_color=(255, 255, 255), stroke_color=(0, 0, 0), stroke_width=2,
+                  bg_color=None, padding=5):
+    """
+    Dessine le texte sur une frame en utilisant Pillow.
+    Si bg_color est défini, un rectangle de fond (avec padding) sera dessiné derrière le texte.
+    """
+    # Convertir l'image de BGR (OpenCV) à RGB (Pillow)
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     pil_image = Image.fromarray(frame_rgb)
     draw = ImageDraw.Draw(pil_image)
+    
     try:
         font = ImageFont.truetype(font_path, font_size)
     except IOError:
         print(f"Erreur: police '{font_path}' non trouvée. Utilisation de la police par défaut.")
         font = ImageFont.load_default()
-    draw.text((x, y), text, font=font, fill=text_color, stroke_width=stroke_width, stroke_fill=stroke_color)
+    
+    # Si bg_color est défini, dessiner un rectangle de fond derrière le texte
+    if bg_color is not None:
+        # On calcule la bounding box du texte, en prenant en compte le stroke_width
+        bbox = draw.textbbox((x, y), text, font=font, stroke_width=stroke_width)
+        # On ajoute du padding autour
+        bg_x0 = bbox[0] - padding
+        bg_y0 = bbox[1] - padding
+        bg_x1 = bbox[2] + padding
+        bg_y1 = bbox[3] + padding
+        draw.rectangle([bg_x0, bg_y0, bg_x1, bg_y1], fill=bg_color)
+    
+    # Dessiner le texte (avec contour)
+    draw.text((x, y), text, font=font, fill=text_color,
+              stroke_width=stroke_width, stroke_fill=stroke_color)
+    
+    # Convertir l'image de nouveau en BGR pour OpenCV
     frame_bgr = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
     return frame_bgr
+
 
 def merge_audio_and_video(video_path, audio_path, output_path):
     cmd = [
