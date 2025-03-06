@@ -10,6 +10,10 @@ from google.cloud import speech
 from pydub import AudioSegment
 import tempfile
 
+# On importe la clé depuis un fichier config.py
+# (ou on pourrait la mettre dans les variables d'env)
+import config
+
 # Charger les variables d'environnement
 load_dotenv()
 
@@ -21,6 +25,24 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+
+@app.before_request
+def check_api_key():
+    """
+    Vérifie la clé d'API avant chaque requête,
+    sauf pour la route d'index (ou autres routes publiques).
+    """
+    # Si on veut laisser l'index accessible à tous :
+    if request.endpoint == 'index':
+        return
+
+    # Récupérer la clé envoyée par le client
+    # Plusieurs méthodes possibles : paramètre GET, paramètre POST, header...
+    # Ici, on regarde d'abord un header 'X-Api-Key', sinon un paramètre 'api_key'.
+    provided_key = request.headers.get('X-Api-Key') or request.args.get('api_key')
+
+    if provided_key != config.SECRET_API_KEY:
+        return jsonify({"error": "Invalid or missing API key"}), 401
 
 def parse_time(time_str):
     hours, minutes, seconds_millis = time_str.split(':')
