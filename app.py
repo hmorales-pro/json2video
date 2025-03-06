@@ -128,18 +128,22 @@ def transcribe_audio_in_chunks(audio_path, chunk_duration_ms=30000):
 
 def transcribe_audio_long(audio_path):
     client = speech.SpeechClient()
-    with open(audio_path, "rb") as audio_file:
-        content = audio_file.read()
-    audio = speech.RecognitionAudio(content=content)
+    # Upload the audio file to GCS
+    destination_blob_name = f"audio/{os.path.basename(audio_path)}"
+    gcs_uri = upload_file_to_gcs(audio_path, destination_blob_name)
+    
+    audio = speech.RecognitionAudio(uri=gcs_uri)
     config = speech.RecognitionConfig(
         encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
         sample_rate_hertz=44100,
         language_code="fr-FR",
         enable_word_time_offsets=True
     )
+    
     print("Attente de la transcription asynchrone pour audio long...")
     operation = client.long_running_recognize(config=config, audio=audio)
-    response = operation.result(timeout=600)  # timeout en secondes
+    response = operation.result(timeout=600)  # Ajuste le timeout si nécessaire
+    
     transcription_data = []
     for result in response.results:
         for word_info in result.alternatives[0].words:
@@ -197,6 +201,25 @@ def generate_srt_subtitles(transcription_data, srt_path):
             srt_file.write(f"{format_timestamp(phrase['start'])} --> {format_timestamp(phrase['end'])}\n")
             srt_file.write(f"{phrase['text']}\n\n")
     print(f"Fichier SRT généré : {srt_path}")
+
+def upload_file_to_gcs(source_file_name, destination_blob_name):
+    """
+    Uploads a file to a Google Cloud Storage bucket and returns the GCS URI.
+    """
+    from google.cloud import storage
+    bucket_name = os.getenv("GCS_BUCKET")
+    if not bucket_name:
+        raise ValueError("GCS_BUCKET environment variable is not set")
+    
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(destination_blob_name)
+    blob.upload_from_filename(source_file_name)
+    
+    # Optionally, you can make the blob public:
+    # blob.make_public()
+    return f"gs://{bucket_name}/{destination_blob_name}"
+
 
 # ---------------------------------------------------
 # Fonctions pour dessiner le texte avec fond "Instagram"
