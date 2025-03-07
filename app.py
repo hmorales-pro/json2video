@@ -295,93 +295,143 @@ def wrap_text_by_width(draw, text, font, max_width):
 # ---------------------------------------------------
 def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, output_path,
                                          fps=24, font_path="DejaVuSans.ttf", font_size=24):
-    subtitles = read_srt(srt_path)
-    audio = AudioSegment.from_file(audio_path)
+    try:
+        print("Lecture des sous-titres depuis", srt_path)
+        subtitles = read_srt(srt_path)
+    except Exception as e:
+        print("Erreur lors de la lecture du fichier SRT :", e)
+        raise
+
+    try:
+        print("Lecture de l'audio depuis", audio_path)
+        audio = AudioSegment.from_file(audio_path)
+    except Exception as e:
+        print("Erreur lors de la lecture de l'audio :", e)
+        raise
+
     total_duration_ms = len(audio)
     total_duration_sec = total_duration_ms / 1000.0
 
     if not image_paths:
         raise ValueError("Aucune image fournie.")
-    first_img = cv2.imread(image_paths[0])
-    height, width, _ = first_img.shape
+    try:
+        first_img = cv2.imread(image_paths[0])
+        if first_img is None:
+            raise ValueError("Impossible de lire l'image: " + image_paths[0])
+        height, width, _ = first_img.shape
+    except Exception as e:
+        print("Erreur lors de la lecture de la première image :", e)
+        raise
 
     total_frames = int(total_duration_sec * fps)
     segment_duration_sec = total_duration_sec / len(image_paths)
 
+    print(f"Création du VideoWriter pour {total_frames} frames ({width}x{height})...")
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     silent_video_path = output_path.replace('.mp4', '_silent.mp4')
     out = cv2.VideoWriter(silent_video_path, fourcc, fps, (width, height))
 
+    # Génération des frames (attention à la mémoire pour un long audio)
     frames_list = []
-    for img_path in image_paths:
-        img_original = cv2.imread(img_path)
-        frames_for_this_image = int(segment_duration_sec * fps)
-        for _ in range(frames_for_this_image):
-            frames_list.append(img_original.copy())
-    if len(frames_list) < total_frames:
-        while len(frames_list) < total_frames:
-            frames_list.append(img_original.copy())
-    elif len(frames_list) > total_frames:
-        frames_list = frames_list[:total_frames]
+    print("Génération de la liste de frames...")
+    try:
+        for img_path in image_paths:
+            img_original = cv2.imread(img_path)
+            if img_original is None:
+                print("Avertissement : impossible de lire l'image", img_path)
+                continue
+            frames_for_this_image = int(segment_duration_sec * fps)
+            for _ in range(frames_for_this_image):
+                frames_list.append(img_original.copy())
+        if len(frames_list) < total_frames:
+            while len(frames_list) < total_frames:
+                frames_list.append(img_original.copy())
+        elif len(frames_list) > total_frames:
+            frames_list = frames_list[:total_frames]
+    except Exception as e:
+        print("Erreur lors de la génération des frames :", e)
+        out.release()
+        raise
 
-    for frame_index, frame in enumerate(frames_list):
-        current_time = frame_index / fps
-        current_subtitle = None
-        for start, end, text in subtitles:
-            if start <= current_time < end:
-                current_subtitle = text
-                break
-        if current_subtitle:
-            dummy_img = Image.new("RGB", (width, height))
-            draw_dummy = ImageDraw.Draw(dummy_img)
-            try:
-                font_pil = ImageFont.truetype(font_path, font_size)
-            except IOError:
-                print(f"Erreur: police '{font_path}' non trouvée. Utilisation de la police par défaut.")
-                font_pil = ImageFont.load_default()
-            max_text_width = int(width * 0.8)
-            lines = wrap_text_by_width(draw_dummy, current_subtitle, font_pil, max_text_width)
-            max_line_width = 0
-            total_text_height = 0
-            line_heights = []
-            for ln in lines:
-                bbox_ln = draw_dummy.textbbox((0, 0), ln, font=font_pil)
-                ln_width = bbox_ln[2] - bbox_ln[0]
-                ln_height = bbox_ln[3] - bbox_ln[1]
-                max_line_width = max(max_line_width, ln_width)
-                line_heights.append(ln_height)
-                total_text_height += ln_height
-            block_x_center = width // 2
-            block_y_center = height // 2
-            block_padding = 20
-            block_left   = block_x_center - (max_line_width // 2) - block_padding
-            block_top    = block_y_center - (total_text_height // 2) - block_padding
-            block_right  = block_x_center + (max_line_width // 2) + block_padding
-            block_bottom = block_y_center + (total_text_height // 2) + block_padding
+    print("Traitement des frames pour incrustation des sous-titres...")
+    try:
+        for frame_index, frame in enumerate(frames_list):
+            current_time = frame_index / fps
+            current_subtitle = None
+            for start, end, text in subtitles:
+                if start <= current_time < end:
+                    current_subtitle = text
+                    break
+            if current_subtitle:
+                # Création d'une image "dummy" pour mesurer le texte
+                dummy_img = Image.new("RGB", (width, height))
+                draw_dummy = ImageDraw.Draw(dummy_img)
+                try:
+                    font_pil = ImageFont.truetype(font_path, font_size)
+                except IOError:
+                    print(f"Erreur: police '{font_path}' non trouvée. Utilisation de la police par défaut.")
+                    font_pil = ImageFont.load_default()
 
-            # Dessiner un rectangle de fond noir pour tout le bloc
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(frame_rgb)
-            draw = ImageDraw.Draw(pil_image)
-            draw.rectangle([block_left, block_top, block_right, block_bottom], fill=(0, 0, 0))
-            current_y = block_top + block_padding
-            for i, ln in enumerate(lines):
-                bbox_ln = draw.textbbox((0, 0), ln, font=font_pil)
-                real_line_width = bbox_ln[2] - bbox_ln[0]
-                line_x = block_x_center - (real_line_width // 2)
-                draw.text(
-                    (line_x, current_y),
-                    ln,
-                    font=font_pil,
-                    fill=(255, 255, 255),
-                    stroke_width=2,
-                    stroke_fill=(0, 0, 0)
-                )
-                current_y += line_heights[i]
-            frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-        out.write(frame)
+                max_text_width = int(width * 0.8)
+                lines = wrap_text_by_width(draw_dummy, current_subtitle, font_pil, max_text_width)
+                # Calculer la largeur maximale et la hauteur totale du bloc
+                max_line_width = 0
+                total_text_height = 0
+                line_heights = []
+                for ln in lines:
+                    bbox_ln = draw_dummy.textbbox((0, 0), ln, font=font_pil)
+                    ln_width = bbox_ln[2] - bbox_ln[0]
+                    ln_height = bbox_ln[3] - bbox_ln[1]
+                    max_line_width = max(max_line_width, ln_width)
+                    line_heights.append(ln_height)
+                    total_text_height += ln_height
+
+                # Calculer la bounding box globale du bloc de texte
+                block_x_center = width // 2
+                block_y_center = height // 2
+                block_padding = 20
+                block_left   = block_x_center - (max_line_width // 2) - block_padding
+                block_top    = block_y_center - (total_text_height // 2) - block_padding
+                block_right  = block_x_center + (max_line_width // 2) + block_padding
+                block_bottom = block_y_center + (total_text_height // 2) + block_padding
+
+                # Dessiner le rectangle de fond noir sur la frame
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_image = Image.fromarray(frame_rgb)
+                draw = ImageDraw.Draw(pil_image)
+                draw.rectangle([block_left, block_top, block_right, block_bottom], fill=(0, 0, 0))
+
+                # Dessiner chaque ligne de texte au centre du bloc
+                current_y = block_top + block_padding
+                for i, ln in enumerate(lines):
+                    bbox_ln = draw.textbbox((0, 0), ln, font=font_pil)
+                    real_line_width = bbox_ln[2] - bbox_ln[0]
+                    line_x = block_x_center - (real_line_width // 2)
+                    draw.text(
+                        (line_x, current_y),
+                        ln,
+                        font=font_pil,
+                        fill=(255, 255, 255),
+                        stroke_width=2,
+                        stroke_fill=(0, 0, 0)
+                    )
+                    current_y += line_heights[i]
+                frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+            out.write(frame)
+    except Exception as e:
+        print("Erreur lors du traitement des frames :", e)
+        out.release()
+        raise
+
     out.release()
-    merge_audio_and_video(silent_video_path, audio_path, output_path)
+    print("Fusion audio/vidéo...")
+    try:
+        merge_audio_and_video(silent_video_path, audio_path, output_path)
+        print("Fusion terminée.")
+    except Exception as e:
+        print("Erreur lors de la fusion audio/vidéo :", e)
+        raise
+
     if os.path.exists(silent_video_path):
         os.remove(silent_video_path)
     print(f"Vidéo finale générée : {output_path}")

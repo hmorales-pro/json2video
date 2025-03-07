@@ -1,2 +1,44 @@
-node_modules
-__pycache__
+# Fichiers Python compilés
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environnement virtuel
+venv/
+ENV/
+env/
+.Python
+
+# Fichier d'environnement (ne jamais versionner les secrets)
+.env
+
+# Dossiers de distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Logs et fichiers temporaires
+*.log
+pip-log.txt
+pip-delete-this-directory.txt
+.cache/
+.mypy_cache/
+
+# Dossiers spécifiques aux éditeurs
+.vscode/
+.idea/
+
+# Inputs / outputs de ton application
+uploads/
+outputs/
