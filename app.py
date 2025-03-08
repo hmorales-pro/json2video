@@ -36,8 +36,10 @@ GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 # ---------------------------------------------------
 @app.before_request
 def check_api_key():
-    if request.endpoint == 'index':
+    # Autoriser l'accès aux routes 'index' et 'monitor' sans API key.
+    if request.endpoint in ['index', 'monitor']:
         return
+    
     provided_key = request.headers.get('X-Api-Key') or request.args.get('api_key')
     if provided_key != config.SECRET_API_KEY:
         return jsonify({"error": "Invalid or missing API key"}), 401
