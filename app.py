@@ -37,7 +37,7 @@ GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 @app.before_request
 def check_api_key():
     # Autoriser l'accès aux routes 'index' et 'monitor' sans API key.
-    if request.endpoint in ['index', 'monitor']:
+    if request.endpoint in ['index', 'monitor', 'logs']:
         return
     
     provided_key = request.headers.get('X-Api-Key') or request.args.get('api_key')
