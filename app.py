@@ -510,32 +510,48 @@ def requires_auth(f):
         return f(*args, **kwargs)
     return decorated
 
-@app.route('/monitor')
+@app.route('/logs')
 @requires_auth
-def monitor():
-    """
-    Une petite interface de monitoring qui affiche le contenu de 'nohup.out'.
-    Tu peux adapter cette page pour afficher d'autres informations.
-    """
+def get_logs():
     try:
         with open("nohup.out", "r") as f:
             log_content = f.read()
     except Exception as e:
-        log_content = "Impossible de lire le fichier de log: " + str(e)
-    html = f"""
+        log_content = "Erreur lors de la lecture des logs: " + str(e)
+    return jsonify({"logs": log_content})
+
+
+@app.route('/monitor')
+@requires_auth
+def monitor():
+    html = """
     <!DOCTYPE html>
     <html>
       <head>
         <meta charset="UTF-8">
         <title>Monitoring de l'application</title>
         <style>
-          body {{ font-family: monospace; background-color: #f0f0f0; padding: 20px; }}
-          pre {{ background-color: #000; color: #0f0; padding: 10px; overflow: auto; }}
+          body { font-family: monospace; background-color: #f0f0f0; padding: 20px; }
+          pre { background-color: #000; color: #0f0; padding: 10px; overflow: auto; height: 80vh; }
         </style>
       </head>
       <body>
-        <h1>Logs de l'application</h1>
-        <pre>{log_content}</pre>
+        <h1>Logs de l'application (mise à jour toutes les 5 secondes)</h1>
+        <pre id="logArea">Chargement...</pre>
+        <script>
+          async function fetchLogs() {
+            try {
+              const response = await fetch('/logs');
+              const data = await response.json();
+              document.getElementById('logArea').textContent = data.logs;
+            } catch (error) {
+              document.getElementById('logArea').textContent = "Erreur lors du chargement des logs";
+            }
+          }
+          // Actualise toutes les 5 secondes
+          setInterval(fetchLogs, 5000);
+          fetchLogs();
+        </script>
       </body>
     </html>
     """
