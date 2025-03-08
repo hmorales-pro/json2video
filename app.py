@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file, send_from_directory
+from flask import Flask, request, jsonify, send_file, send_from_directory, Response, render_template_string
 import os
 import uuid
 import subprocess
@@ -10,8 +10,14 @@ from google.cloud import speech
 from pydub import AudioSegment
 import tempfile
 
+from functools import wraps
+
 # On importe la clé depuis un fichier config.py
 import config
+
+# Définir des identifiants en dur
+USERNAME = "admin"
+PASSWORD = "monMotDePasse"
 
 # Charger les variables d'environnement
 load_dotenv()
@@ -480,6 +486,58 @@ def generate_video_endpoint():
     filename = os.path.basename(output_path)
     file_url = request.host_url + 'outputs/' + filename
     return jsonify({'url': file_url})
+
+
+def check_auth(username, password):
+    """Vérifie que le couple utilisateur/mot de passe est correct."""
+    return username == USERNAME and password == PASSWORD
+
+def authenticate():
+    """Envoie une réponse 401 pour demander l'authentification."""
+    return Response(
+        'Accès non autorisé.', 401,
+        {'WWW-Authenticate': 'Basic realm="Login Required"'}
+    )
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
+
+@app.route('/monitor')
+@requires_auth
+def monitor():
+    """
+    Une petite interface de monitoring qui affiche le contenu de 'nohup.out'.
+    Tu peux adapter cette page pour afficher d'autres informations.
+    """
+    try:
+        with open("nohup.out", "r") as f:
+            log_content = f.read()
+    except Exception as e:
+        log_content = "Impossible de lire le fichier de log: " + str(e)
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Monitoring de l'application</title>
+        <style>
+          body {{ font-family: monospace; background-color: #f0f0f0; padding: 20px; }}
+          pre {{ background-color: #000; color: #0f0; padding: 10px; overflow: auto; }}
+        </style>
+      </head>
+      <body>
+        <h1>Logs de l'application</h1>
+        <pre>{log_content}</pre>
+      </body>
+    </html>
+    """
+    return render_template_string(html)
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
