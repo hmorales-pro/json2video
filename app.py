@@ -302,7 +302,8 @@ def wrap_text_by_width(draw, text, font, max_width):
 # Génération vidéo avec sous-titres "Instagram"
 # ---------------------------------------------------
 def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, output_path,
-                                         fps=24, font_path="DejaVuSans.ttf", font_size=24):
+                                         fps=24, font_path="DejaVuSans.ttf", font_size=24,
+                                         max_width=1280, max_height=720):
     try:
         print("Lecture des sous-titres depuis", srt_path)
         subtitles = read_srt(srt_path)
@@ -325,23 +326,35 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
     try:
         first_img = cv2.imread(image_paths[0])
         if first_img is None:
-            raise ValueError("Impossible de lire l'image : " + image_paths[0])
-        height, width, _ = first_img.shape
+            raise ValueError("Impossible de lire l'image: " + image_paths[0])
+        orig_height, orig_width, _ = first_img.shape
     except Exception as e:
         print("Erreur lors de la lecture de la première image :", e)
         raise
+
+    # Vérifier et redimensionner si nécessaire
+    width, height = orig_width, orig_height
+    if width > max_width or height > max_height:
+        ratio = min(max_width / width, max_height / height)
+        new_width = int(width * ratio)
+        new_height = int(height * ratio)
+        print(f"Redimensionnement: {width}x{height} -> {new_width}x{new_height}")
+        width, height = new_width, new_height
+    else:
+        print(f"Dimensions utilisées: {width}x{height}")
 
     total_frames = int(total_duration_sec * fps)
     segment_duration_sec = total_duration_sec / len(image_paths)
     print(f"Durée totale de la vidéo : {total_duration_sec:.2f} s, soit {total_frames} frames.")
 
+    # Créer le VideoWriter avec les dimensions vérifiées
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     silent_video_path = output_path.replace('.mp4', '_silent.mp4')
     out = cv2.VideoWriter(silent_video_path, fourcc, fps, (width, height))
     if not out.isOpened():
         raise Exception("Le VideoWriter n'a pas pu être ouvert.")
 
-    # Pour éviter de stocker toutes les frames en mémoire, on écrit les frames directement
+    # Écrire les frames directement sans tout stocker en mémoire
     global_frame_index = 0
     num_images = len(image_paths)
     print("Début de l'écriture des frames...")
@@ -350,13 +363,13 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
             print(f"Traitement de l'image {idx+1}/{num_images}: {img_path}")
             img_original = cv2.imread(img_path)
             if img_original is None:
-                print("Avertissement : Impossible de lire l'image", img_path, "- elle sera ignorée.")
+                print("Avertissement : impossible de lire l'image", img_path)
                 continue
-            # Calculer le nombre de frames pour cette image
+            # Redimensionner l'image pour correspondre aux dimensions du VideoWriter
+            img_original = cv2.resize(img_original, (width, height))
             frames_for_this_image = int(segment_duration_sec * fps)
             for i in range(frames_for_this_image):
-                current_time = global_frame_index / fps  # temps en secondes pour cette frame
-                # Chercher le sous-titre actif pour ce temps
+                current_time = global_frame_index / fps
                 current_subtitle = None
                 for start, end, text in subtitles:
                     if start <= current_time < end:
@@ -365,8 +378,7 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
 
                 frame = img_original.copy()
                 if current_subtitle:
-                    # Traitement du sous-titre sur la frame
-                    # On crée une image PIL "dummy" pour mesurer le texte
+                    # On crée une image PIL pour dessiner le sous-titre
                     dummy_img = Image.new("RGB", (width, height))
                     draw_dummy = ImageDraw.Draw(dummy_img)
                     try:
@@ -377,7 +389,6 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
 
                     max_text_width = int(width * 0.8)
                     lines = wrap_text_by_width(draw_dummy, current_subtitle, font_pil, max_text_width)
-                    # Calculer la largeur maximale et la hauteur totale du bloc de texte
                     max_line_width = 0
                     total_text_height = 0
                     line_heights = []
@@ -389,7 +400,6 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
                         line_heights.append(ln_height)
                         total_text_height += ln_height
 
-                    # Pour cet exemple, on centre le bloc au milieu de la frame
                     block_x_center = width // 2
                     block_y_center = height // 2
                     block_padding = 20
@@ -398,11 +408,11 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
                     block_right  = block_x_center + (max_line_width // 2) + block_padding
                     block_bottom = block_y_center + (total_text_height // 2) + block_padding
 
-                    # Convertir la frame en image PIL pour dessiner
+                    # Convertir la frame pour dessiner en Pillow
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     pil_image = Image.fromarray(frame_rgb)
                     draw = ImageDraw.Draw(pil_image)
-                    # Dessiner le rectangle de fond noir pour le bloc de texte
+                    # Dessiner le rectangle de fond
                     draw.rectangle([block_left, block_top, block_right, block_bottom], fill=(0, 0, 0))
                     current_y = block_top + block_padding
                     for i, ln in enumerate(lines):
@@ -418,7 +428,6 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
                             stroke_fill=(0, 0, 0)
                         )
                         current_y += line_heights[i]
-                    # Convertir en BGR pour OpenCV
                     frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
                 out.write(frame)
                 global_frame_index += 1
@@ -441,6 +450,7 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
     if os.path.exists(silent_video_path):
         os.remove(silent_video_path)
     print(f"Vidéo finale générée : {output_path}")
+
 
 # ---------------------------------------------------
 # Routes Flask
