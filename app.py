@@ -47,6 +47,31 @@ def check_api_key():
 # ---------------------------------------------------
 # Fonctions utilitaires
 # ---------------------------------------------------
+
+def read_image(image_path, target_size=None):
+    """
+    Essaie de lire une image avec cv2.imread.
+    Si cela échoue (par exemple pour un GIF), utilise Pillow pour ouvrir l'image, la convertir en RGB,
+    puis la convertit en BGR (format OpenCV). Optionnellement, redimensionne l'image à target_size (largeur, hauteur).
+    """
+    img = cv2.imread(image_path)
+    if img is None:
+        try:
+            pil_img = Image.open(image_path).convert("RGB")
+            img = np.array(pil_img)
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            print(f"Image {image_path} chargée via Pillow.")
+        except Exception as e:
+            print(f"Erreur lors de la lecture de l'image {image_path} avec Pillow : {e}")
+            return None
+    if target_size is not None:
+        try:
+            img = cv2.resize(img, target_size)
+        except Exception as e:
+            print(f"Erreur lors du redimensionnement de l'image {image_path}: {e}")
+            return None
+    return img
+
 def parse_time(time_str):
     hours, minutes, seconds_millis = time_str.split(':')
     seconds, millis = seconds_millis.split(',')
@@ -265,6 +290,7 @@ def draw_text_pil(frame, text, x, y,
 # Fusion audio + vidéo avec ffmpeg
 # ---------------------------------------------------
 def merge_audio_and_video(video_path, audio_path, output_path):
+    import subprocess
     cmd = [
         'ffmpeg', '-y',
         '-i', video_path,
@@ -282,6 +308,10 @@ def merge_audio_and_video(video_path, audio_path, output_path):
 # Fonction de découpe en lignes (wrap text)
 # ---------------------------------------------------
 def wrap_text_by_width(draw, text, font, max_width):
+    """
+    Découpe `text` en plusieurs lignes pour qu'aucune ne dépasse `max_width`.
+    Retourne une liste de lignes.
+    """
     words = text.split()
     lines = []
     current_line = []
@@ -304,35 +334,26 @@ def wrap_text_by_width(draw, text, font, max_width):
 def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, output_path,
                                          fps=24, font_path="DejaVuSans.ttf", font_size=24,
                                          max_width=1280, max_height=720):
-    try:
-        print("Lecture des sous-titres depuis", srt_path)
-        subtitles = read_srt(srt_path)
-    except Exception as e:
-        print("Erreur lors de la lecture du fichier SRT :", e)
-        raise
-
-    try:
-        print("Lecture de l'audio depuis", audio_path)
-        audio = AudioSegment.from_file(audio_path)
-    except Exception as e:
-        print("Erreur lors de la lecture de l'audio :", e)
-        raise
-
+    # Lecture des sous-titres et de l'audio
+    print("Lecture des sous-titres depuis", srt_path)
+    subtitles = read_srt(srt_path)
+    
+    print("Lecture de l'audio depuis", audio_path)
+    from pydub import AudioSegment
+    audio = AudioSegment.from_file(audio_path)
     total_duration_ms = len(audio)
     total_duration_sec = total_duration_ms / 1000.0
 
     if not image_paths:
         raise ValueError("Aucune image fournie.")
-    try:
-        first_img = cv2.imread(image_paths[0])
-        if first_img is None:
-            raise ValueError("Impossible de lire l'image: " + image_paths[0])
-        orig_height, orig_width, _ = first_img.shape
-    except Exception as e:
-        print("Erreur lors de la lecture de la première image :", e)
-        raise
+    
+    # Lecture de la première image avec read_image pour obtenir les dimensions
+    first_img = read_image(image_paths[0])
+    if first_img is None:
+        raise ValueError("Impossible de lire l'image: " + image_paths[0])
+    orig_height, orig_width, _ = first_img.shape
 
-    # Vérifier et redimensionner si nécessaire
+    # Redimensionnement global si nécessaire
     width, height = orig_width, orig_height
     if width > max_width or height > max_height:
         ratio = min(max_width / width, max_height / height)
@@ -345,28 +366,26 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
 
     total_frames = int(total_duration_sec * fps)
     segment_duration_sec = total_duration_sec / len(image_paths)
-    print(f"Durée totale de la vidéo : {total_duration_sec:.2f} s, soit {total_frames} frames.")
+    print(f"Durée totale : {total_duration_sec:.2f} s, {total_frames} frames.")
 
-    # Créer le VideoWriter avec les dimensions vérifiées
+    # Création du VideoWriter
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     silent_video_path = output_path.replace('.mp4', '_silent.mp4')
     out = cv2.VideoWriter(silent_video_path, fourcc, fps, (width, height))
     if not out.isOpened():
         raise Exception("Le VideoWriter n'a pas pu être ouvert.")
 
-    # Écrire les frames directement sans tout stocker en mémoire
     global_frame_index = 0
     num_images = len(image_paths)
     print("Début de l'écriture des frames...")
     try:
         for idx, img_path in enumerate(image_paths):
             print(f"Traitement de l'image {idx+1}/{num_images}: {img_path}")
-            img_original = cv2.imread(img_path)
+            # Utiliser read_image pour gérer tous les formats
+            img_original = read_image(img_path, target_size=(width, height))
             if img_original is None:
-                print("Avertissement : impossible de lire l'image", img_path)
+                print("Avertissement : image ignorée -", img_path)
                 continue
-            # Redimensionner l'image pour correspondre aux dimensions du VideoWriter
-            img_original = cv2.resize(img_original, (width, height))
             frames_for_this_image = int(segment_duration_sec * fps)
             for i in range(frames_for_this_image):
                 current_time = global_frame_index / fps
@@ -378,7 +397,7 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
 
                 frame = img_original.copy()
                 if current_subtitle:
-                    # On crée une image PIL pour dessiner le sous-titre
+                    # Créer une image dummy pour mesurer le texte
                     dummy_img = Image.new("RGB", (width, height))
                     draw_dummy = ImageDraw.Draw(dummy_img)
                     try:
@@ -386,7 +405,6 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
                     except IOError:
                         print(f"Erreur: police '{font_path}' non trouvée. Utilisation de la police par défaut.")
                         font_pil = ImageFont.load_default()
-
                     max_text_width = int(width * 0.8)
                     lines = wrap_text_by_width(draw_dummy, current_subtitle, font_pil, max_text_width)
                     max_line_width = 0
@@ -408,11 +426,11 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
                     block_right  = block_x_center + (max_line_width // 2) + block_padding
                     block_bottom = block_y_center + (total_text_height // 2) + block_padding
 
-                    # Convertir la frame pour dessiner en Pillow
+                    # Convertir la frame en image PIL pour dessiner le bloc de texte
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     pil_image = Image.fromarray(frame_rgb)
                     draw = ImageDraw.Draw(pil_image)
-                    # Dessiner le rectangle de fond
+                    # Dessiner le rectangle de fond noir
                     draw.rectangle([block_left, block_top, block_right, block_bottom], fill=(0, 0, 0))
                     current_y = block_top + block_padding
                     for i, ln in enumerate(lines):
