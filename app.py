@@ -114,13 +114,15 @@ def resize_and_validate_images(image_paths, orientation='landscape'):
     return valid_images
 
 def convert_audio_to_wav(audio_path, output_path):
+    import subprocess
     result = subprocess.run([
-        'ffmpeg', '-y', '-i', audio_path, '-acodec', 'pcm_s16le', '-ac', '1', '-ar', '44100', output_path
+        'ffmpeg', '-y', '-i', audio_path, '-acodec', 'pcm_s16le',
+        '-ac', '1', '-ar', '44100', output_path
     ], capture_output=True, text=True)
     print("FFmpeg audio conversion stdout:", result.stdout)
     print("FFmpeg audio conversion stderr:", result.stderr)
     if not os.path.exists(output_path):
-        raise FileNotFoundError(f"Le fichier WAV n'a pas été créé : {output_path}")
+        raise FileNotFoundError(f"Le fichier WAV n'a pas été créé : {output_path}\nFFmpeg stderr: {result.stderr}")
 
 
 # ---------------------------------------------------
