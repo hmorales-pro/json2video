@@ -30,6 +30,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+ALLOWED_AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a'}
 
 # ---------------------------------------------------
 # Vérification de la clé d'API
@@ -332,6 +333,10 @@ def wrap_text_by_width(draw, text, font, max_width):
         lines.append(' '.join(current_line))
     return lines
 
+def is_valid_audio_file(filename):
+    ext = os.path.splitext(filename)[1].lower()
+    return ext in ALLOWED_AUDIO_EXTENSIONS
+
 # ---------------------------------------------------
 # Génération vidéo avec sous-titres "Instagram"
 # ---------------------------------------------------
@@ -491,8 +496,13 @@ def generate_video_endpoint():
     audio_file = request.files.get('audio')
     image_files = request.files.getlist('images')
     orientation = request.form.get('orientation', 'landscape')
+    
     if not audio_file or not image_files:
         return jsonify({'error': 'Audio file and at least one image file are required'}), 400
+
+    if not is_valid_audio_file(audio_file.filename):
+        return jsonify({'error': 'Invalid audio file type. Allowed types: mp3, wav, m4a'}), 400
+    
     audio_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}_{audio_file.filename}")
     audio_file.save(audio_path)
     image_paths = []
