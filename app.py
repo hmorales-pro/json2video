@@ -129,7 +129,8 @@ def convert_audio_to_wav(audio_path, output_path):
 # ---------------------------------------------------
 # Transcription – Deux modes selon la durée de l'audio
 # ---------------------------------------------------
-def transcribe_audio_in_chunks(audio_path, chunk_duration_ms=30000):
+def transcribe_audio_in_chunks(audio_path, chunk_duration_ms=30000, language_code="fr-FR"):
+    from pydub import AudioSegment
     audio_segment = AudioSegment.from_wav(audio_path)
     total_duration_ms = len(audio_segment)
     transcription_data = []
@@ -147,7 +148,7 @@ def transcribe_audio_in_chunks(audio_path, chunk_duration_ms=30000):
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=44100,
-            language_code="fr-FR",
+            language_code=language_code,
             enable_word_time_offsets=True
         )
         try:
@@ -164,7 +165,7 @@ def transcribe_audio_in_chunks(audio_path, chunk_duration_ms=30000):
         os.remove(chunk_path)
     return transcription_data
 
-def transcribe_audio_long(audio_path):
+def transcribe_audio_long(audio_path, language_code="fr-FR"):
     client = speech.SpeechClient()
     # Upload the audio file to GCS
     destination_blob_name = f"audio/{os.path.basename(audio_path)}"
@@ -174,7 +175,7 @@ def transcribe_audio_long(audio_path):
     config = speech.RecognitionConfig(
         encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
         sample_rate_hertz=44100,
-        language_code="fr-FR",
+        language_code=language_code,
         enable_word_time_offsets=True
     )
     
@@ -192,15 +193,16 @@ def transcribe_audio_long(audio_path):
             })
     return transcription_data
 
-def transcribe_audio(audio_path, chunk_duration_ms=30000, threshold_sec=60):
+def transcribe_audio(audio_path, chunk_duration_ms=30000, threshold_sec=60, language_code="fr-FR"):
+    from pydub import AudioSegment
     audio_segment = AudioSegment.from_wav(audio_path)
     duration_sec = len(audio_segment) / 1000.0
     if duration_sec <= threshold_sec:
         print("Utilisation de la transcription synchrone en chunks")
-        return transcribe_audio_in_chunks(audio_path, chunk_duration_ms)
+        return transcribe_audio_in_chunks(audio_path, chunk_duration_ms, language_code)
     else:
         print("Utilisation de la transcription asynchrone pour audio long")
-        return transcribe_audio_long(audio_path)
+        return transcribe_audio_long(audio_path, language_code)
 
 # ---------------------------------------------------
 # Génération des sous-titres (SRT)
@@ -342,25 +344,37 @@ def is_valid_audio_file(filename):
 # ---------------------------------------------------
 def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, output_path,
                                          fps=24, font_path="DejaVuSans.ttf", font_size=24,
-                                         max_width=1280, max_height=720):
-    # Lecture des sous-titres et de l'audio
-    print("Lecture des sous-titres depuis", srt_path)
-    subtitles = read_srt(srt_path)
-    
-    print("Lecture de l'audio depuis", audio_path)
-    from pydub import AudioSegment
-    audio = AudioSegment.from_file(audio_path)
+                                         max_width=1280, max_height=720,
+                                         generate_subtitles=True):
+    try:
+        print("Lecture des sous-titres depuis", srt_path)
+        subtitles = read_srt(srt_path)
+    except Exception as e:
+        print("Erreur lors de la lecture du fichier SRT :", e)
+        raise
+
+    try:
+        print("Lecture de l'audio depuis", audio_path)
+        from pydub import AudioSegment
+        audio = AudioSegment.from_file(audio_path)
+    except Exception as e:
+        print("Erreur lors de la lecture de l'audio :", e)
+        raise
+
     total_duration_ms = len(audio)
     total_duration_sec = total_duration_ms / 1000.0
 
     if not image_paths:
         raise ValueError("Aucune image fournie.")
-    
-    # Lecture de la première image avec read_image pour obtenir les dimensions
-    first_img = read_image(image_paths[0])
-    if first_img is None:
-        raise ValueError("Impossible de lire l'image: " + image_paths[0])
-    orig_height, orig_width, _ = first_img.shape
+    try:
+        # Utiliser read_image (voir fonction ci-dessous) pour gérer différents formats
+        first_img = read_image(image_paths[0])
+        if first_img is None:
+            raise ValueError("Impossible de lire l'image: " + image_paths[0])
+        orig_height, orig_width, _ = first_img.shape
+    except Exception as e:
+        print("Erreur lors de la lecture de la première image :", e)
+        raise
 
     # Redimensionnement global si nécessaire
     width, height = orig_width, orig_height
@@ -390,7 +404,7 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
     try:
         for idx, img_path in enumerate(image_paths):
             print(f"Traitement de l'image {idx+1}/{num_images}: {img_path}")
-            # Utiliser read_image pour gérer tous les formats
+            # Utiliser read_image pour charger et redimensionner l'image
             img_original = read_image(img_path, target_size=(width, height))
             if img_original is None:
                 print("Avertissement : image ignorée -", img_path)
@@ -399,14 +413,15 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
             for i in range(frames_for_this_image):
                 current_time = global_frame_index / fps
                 current_subtitle = None
-                for start, end, text in subtitles:
-                    if start <= current_time < end:
-                        current_subtitle = text
-                        break
+                if generate_subtitles:
+                    for start, end, text in subtitles:
+                        if start <= current_time < end:
+                            current_subtitle = text
+                            break
 
                 frame = img_original.copy()
-                if current_subtitle:
-                    # Créer une image dummy pour mesurer le texte
+                if generate_subtitles and current_subtitle:
+                    # Traitement du sous-titre sur la frame
                     dummy_img = Image.new("RGB", (width, height))
                     draw_dummy = ImageDraw.Draw(dummy_img)
                     try:
@@ -435,11 +450,9 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
                     block_right  = block_x_center + (max_line_width // 2) + block_padding
                     block_bottom = block_y_center + (total_text_height // 2) + block_padding
 
-                    # Convertir la frame en image PIL pour dessiner le bloc de texte
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     pil_image = Image.fromarray(frame_rgb)
                     draw = ImageDraw.Draw(pil_image)
-                    # Dessiner le rectangle de fond noir
                     draw.rectangle([block_left, block_top, block_right, block_bottom], fill=(0, 0, 0))
                     current_y = block_top + block_padding
                     for i, ln in enumerate(lines):
@@ -493,18 +506,18 @@ def index():
 @app.route('/generate-video', methods=['POST'])
 def generate_video_endpoint():
     print("Fichiers reçus :", request.files.keys())
+
     audio_file = request.files.get('audio')
     image_files = request.files.getlist('images')
     orientation = request.form.get('orientation', 'landscape')
-    
+
     if not audio_file or not image_files:
         return jsonify({'error': 'Audio file and at least one image file are required'}), 400
 
-    if not is_valid_audio_file(audio_file.filename):
-        return jsonify({'error': 'Invalid audio file type. Allowed types: mp3, wav, m4a'}), 400
-    
+    # Vérification de l'audio
     audio_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}_{audio_file.filename}")
     audio_file.save(audio_path)
+
     image_paths = []
     for image_file in image_files:
         if image_file.filename.lower().endswith(('png', 'jpg', 'jpeg', 'bmp', 'gif')):
@@ -513,20 +526,34 @@ def generate_video_endpoint():
             image_paths.append(image_path)
         else:
             print(f"Fichier ignoré car non valide : {image_file.filename}")
+
     wav_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.wav")
     convert_audio_to_wav(audio_path, wav_path)
-    # Utilise la fonction transcribe_audio qui s'adapte selon la durée
-    transcription_data = transcribe_audio(wav_path, chunk_duration_ms=30000, threshold_sec=60)
-    srt_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.srt")
-    generate_srt_subtitles(transcription_data, srt_path)
+    
+    # Récupérer les paramètres optionnels pour les sous-titres
+    generate_subtitles_param = request.form.get("generate_subtitles", "true").lower() == "true"
+    subtitle_lang = request.form.get("subtitle_lang", "fr-FR")
+    
+    if generate_subtitles_param:
+        transcription_data = transcribe_audio(wav_path, chunk_duration_ms=30000, threshold_sec=60, language_code=subtitle_lang)
+        srt_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.srt")
+        generate_srt_subtitles(transcription_data, srt_path)
+    else:
+        # Créer un fichier SRT vide
+        srt_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.srt")
+        with open(srt_path, "w", encoding="utf-8") as f:
+            f.write("")
+
     output_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.mp4")
     generate_video_with_subtitles_opencv(image_paths, wav_path, srt_path, output_path,
                                          fps=24,
                                          font_path="DejaVuSans.ttf",
-                                         font_size=48)
+                                         font_size=48,
+                                         generate_subtitles=generate_subtitles_param)
     if not os.path.exists(output_path):
         print(f"Erreur : La vidéo {output_path} n'a pas été créée.")
         return jsonify({'error': 'Video file not created'}), 500
+
     filename = os.path.basename(output_path)
     file_url = request.host_url + 'outputs/' + filename
     return jsonify({'url': file_url})
