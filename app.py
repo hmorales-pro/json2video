@@ -55,6 +55,9 @@ def read_image(image_path, target_size=None):
     Si cela échoue (par exemple pour un GIF), utilise Pillow pour ouvrir l'image, la convertir en RGB,
     puis la convertit en BGR (format OpenCV). Optionnellement, redimensionne l'image à target_size (largeur, hauteur).
     """
+    import cv2
+    import numpy as np
+    from PIL import Image
     img = cv2.imread(image_path)
     if img is None:
         try:
