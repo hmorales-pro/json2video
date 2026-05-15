@@ -24,6 +24,9 @@ credentials
 # ---------------------------------------------------------------
 # Python
 # ---------------------------------------------------------------
+# ⚠️  Pas de "lib/" ici ! Notre code Node utilise lib/ pour ses modules.
+# Les patterns "lib/", "lib64/", "parts/", "var/" etc. viennent du
+# packaging Python et casseraient le déploiement de l'API.
 __pycache__/
 *.py[cod]
 *$py.class
@@ -31,20 +34,11 @@ venv/
 ENV/
 env/
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
 .eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
 *.egg-info/
-.installed.cfg
 *.egg
+.installed.cfg
+build/dist/
 
 # ---------------------------------------------------------------
 # Node
