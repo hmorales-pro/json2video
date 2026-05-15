@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------
+# Caddy reverse proxy pour json2video.
+#
+# - HTTPS automatique via Let's Encrypt
+# - Compression gzip + zstd
+# - Body size raised à 500MB pour accepter les uploads vidéo
+# - Logs JSON pour parsing facile
+#
+# Remplacer json2video.example.com par TON domaine, et l'email
+# par TON adresse (Let's Encrypt l'utilise pour les notifications
+# d'expiration).
+# ---------------------------------------------------------------
+
+{
+    email admin@example.com
+}
+
+json2video.example.com {
+    reverse_proxy node-api:3000
+
+    encode gzip zstd
+
+    # Multer accepte jusqu'à 200 MB par fichier × 60 fichiers max.
+    # On laisse une marge confortable côté Caddy.
+    request_body {
+        max_size 500MB
+    }
+
+    # Bonne pratique : timeouts généreux car les rendus peuvent durer
+    # plusieurs dizaines de secondes (uploads + transcription + ffmpeg).
+    handle {
+        reverse_proxy node-api:3000 {
+            transport http {
+                read_timeout 30m
+                write_timeout 30m
+            }
+        }
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}

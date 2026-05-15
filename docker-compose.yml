@@ -1,6 +1,7 @@
 services:
   # ---------------------------------------------------------------
-  # Pipeline Node + FFmpeg (recommandé)
+  # API json2video (Node + FFmpeg)
+  # PAS exposé publiquement : seul Caddy y accède via le réseau interne.
   # ---------------------------------------------------------------
   node-api:
     build: .
@@ -11,44 +12,71 @@ services:
     environment:
       NODE_PORT: 3000
       PYTHON_BIN: python3
-    ports:
-      - "127.0.0.1:3000:3000"
+      # Le binaire ffmpeg de l'image inclut libass.
+      FFMPEG_BIN: ffmpeg
+      FFPROBE_BIN: ffprobe
+    expose:
+      - "3000"
     volumes:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
-      # Monter le service-account GCP en lecture seule si l'app y accède
-      - ./credentials:/app/credentials:ro
-    command: ["node", "server.js"]
+    networks:
+      - j2v
     healthcheck:
-      test:
-        - CMD-SHELL
-        - "wget -qO- http://localhost:3000/ >/dev/null || exit 0"
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ >/dev/null || exit 0"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
 
   # ---------------------------------------------------------------
-  # Pipeline Flask + OpenCV (legacy, kept for compat)
-  # Décommenter si vous voulez aussi exposer l'API Python.
+  # Caddy : reverse proxy avec HTTPS automatique (Let's Encrypt).
+  # SEUL container exposé sur Internet.
   # ---------------------------------------------------------------
-  # flask-api:
-  #   image: json2video:latest
-  #   build: .
-  #   container_name: json2video-flask
-  #   depends_on:
-  #     - node-api
-  #   restart: unless-stopped
-  #   env_file: .env
-  #   environment:
-  #     FLASK_PORT: 5001
-  #     FLASK_HOST: 0.0.0.0
-  #     GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/service-account.json
-  #   ports:
-  #     - "127.0.0.1:5001:5001"
-  #   volumes:
-  #     - ./uploads:/app/uploads
-  #     - ./outputs:/app/outputs
-  #     - ./credentials:/app/credentials:ro
-  #   command:
-  #     ["gunicorn", "-w", "2", "-b", "0.0.0.0:5001", "--timeout", "600", "app:app"]
+  caddy:
+    image: caddy:2-alpine
+    container_name: json2video-caddy
+    restart: unless-stopped
+    depends_on:
+      - node-api
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - j2v
+
+  # ---------------------------------------------------------------
+  # Nettoyage automatique des fichiers uploads/outputs > 24h
+  # via un sidecar qui exécute le script de cleanup.
+  # ---------------------------------------------------------------
+  cleanup:
+    image: alpine:3.20
+    container_name: json2video-cleanup
+    restart: unless-stopped
+    depends_on:
+      - node-api
+    volumes:
+      - ./uploads:/uploads
+      - ./outputs:/outputs
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          echo "[cleanup] $(date) — nettoyage > 24h"
+          find /uploads -type f -mmin +1440 -delete 2>/dev/null || true
+          find /outputs -type f -mmin +1440 -delete 2>/dev/null || true
+          sleep 3600
+        done
+
+networks:
+  j2v:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

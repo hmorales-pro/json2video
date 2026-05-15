@@ -4,7 +4,9 @@
 .env
 .env.*
 !.env.example
-config.py
+
+# (config.py est maintenant safe : il ne fait que lire os.getenv().
+#  On le garde versionné comme template pour les autres devs.)
 
 # Google Cloud credentials (service account & OAuth client)
 client_secret*.json
