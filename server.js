@@ -26,6 +26,7 @@ const { render } = require("./lib/render");
 const { transcribeSrt, transcribeWordLevel } = require("./lib/transcribe");
 const { defaultQueue } = require("./lib/queue");
 const { runPreflight, logPreflight } = require("./lib/preflight");
+const { validateWebhookUrl, postWebhook } = require("./lib/webhook");
 
 // ---------------------------------------------------------------
 // Config
@@ -290,33 +291,80 @@ app.post(
         cleanupFiles(allFiles.map((f) => f.path));
         return res.status(400).json({ error: "Au moins un fichier média requis." });
       }
+
+      // Webhook URL optionnelle (Make.com, n8n, Zapier, etc.)
+      // Validation immédiate avant d'enqueue : pas de webhook KO en silence.
+      const webhookUrl = (req.body?.webhook_url || "").trim() || null;
+      if (webhookUrl) {
+        await validateWebhookUrl(webhookUrl); // throw 400 si KO
+      }
+
       const validated = await _buildValidatedConfig(req, mediaFiles);
       const outputPath = path.resolve("outputs", `${uuidv4()}_final.mp4`);
       const tempInputs = allFiles.map((f) => f.path);
 
       const jobId = defaultQueue.enqueue(
-        async () => {
+        async (currentJobId) => {
+          let result;
+          let renderError;
           try {
             const { totalDurationSec } = await render({
               config: validated, mediaFiles, audioFile, musicFile,
               transcribeFns, outputPath, tmpDir: "uploads",
             });
-            return {
+            result = {
               downloadUrl: `${PUBLIC_BASE_URL}/download/${path.basename(outputPath)}`,
               duration_sec: totalDurationSec,
               media_count: mediaFiles.length,
             };
+          } catch (err) {
+            renderError = err;
           } finally {
             cleanupFiles(tempInputs);
           }
+
+          // Notification webhook (fire-and-forget, ne bloque pas le retour).
+          if (webhookUrl) {
+            const payload = renderError
+              ? {
+                  job_id: currentJobId,
+                  status: "failed",
+                  error: renderError.message,
+                  finished_at: new Date().toISOString(),
+                }
+              : {
+                  job_id: currentJobId,
+                  status: "completed",
+                  result,
+                  finished_at: new Date().toISOString(),
+                };
+            // On poste sans bloquer la fin du job, mais on stocke le résultat
+            // dans le job pour que /jobs/:id le montre.
+            postWebhook(webhookUrl, payload)
+              .then((webhookRes) => {
+                const job = defaultQueue.get(currentJobId);
+                if (job && defaultQueue.jobs.get(currentJobId)) {
+                  defaultQueue.jobs.get(currentJobId).webhook = webhookRes;
+                }
+              })
+              .catch((e) => console.warn("[webhook] unexpected:", e.message));
+          }
+
+          if (renderError) throw renderError;
+          return result;
         },
         {
           media_count: mediaFiles.length,
           format: `${validated.format.width}x${validated.format.height}`,
           subtitle_mode: validated.subtitle.mode,
+          webhook_url: webhookUrl || undefined,
         }
       );
-      return res.status(202).json({ job_id: jobId, status_url: `${PUBLIC_BASE_URL}/jobs/${jobId}` });
+      return res.status(202).json({
+        job_id: jobId,
+        status_url: `${PUBLIC_BASE_URL}/jobs/${jobId}`,
+        webhook_configured: !!webhookUrl,
+      });
     } catch (err) {
       cleanupFiles(allFiles.map((f) => f.path));
       console.error("/render/async KO:", err.message);

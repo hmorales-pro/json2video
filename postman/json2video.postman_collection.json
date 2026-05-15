@@ -677,6 +677,43 @@
           }
         },
         {
+          "name": "POST /render/async + webhook_url (Make.com)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var data = pm.response.json();",
+                  "if (data.job_id) pm.environment.set('last_job_id', data.job_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "description": "Le rendu est exécuté en arrière-plan. À la fin, le serveur fait un POST JSON sur webhook_url avec :\n\n```json\n{\n  \"job_id\": \"...\",\n  \"status\": \"completed\" | \"failed\",\n  \"result\": { \"downloadUrl\": \"...\", \"duration_sec\": ..., \"media_count\": ... },\n  \"error\": \"...\",            // si failed\n  \"finished_at\": \"2026-...\"\n}\n```\n\nPlus besoin de polling. Idéal pour Make.com, n8n, Zapier.\n\nLa webhook_url doit être HTTPS et ne pas pointer vers une IP privée (anti-SSRF).",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "config",
+                  "value": "{\"template\":\"reels-karaoke\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "webhook_url",
+                  "value": "https://hook.make.com/REMPLACE_PAR_TON_WEBHOOK_MAKE",
+                  "type": "text",
+                  "description": "URL Make.com (Custom webhook trigger)"
+                },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render/async", "host": ["{{base_url}}"], "path": ["render", "async"] }
+          }
+        },
+        {
           "name": "GET /jobs/:id (auto avec last_job_id)",
           "request": {
             "method": "GET",
