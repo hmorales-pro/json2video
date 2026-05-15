@@ -184,6 +184,42 @@ function _parseUploads(allFiles) {
   return { audioFile, musicFile, mediaFiles };
 }
 
+/**
+ * Parse + valide un champ metadata libre fourni par le client.
+ * Renvoie l'objet parsé ou null si absent. Throw 400 si invalide.
+ *
+ * Règles :
+ *   - JSON valide
+ *   - DOIT être un objet (pas tableau, pas primitive)
+ *   - Sérialisé < 8 KB (anti-abus)
+ *
+ * Le contenu est traité comme une boîte noire : on l'echo tel quel dans
+ * le webhook et /jobs/:id, sans interprétation.
+ */
+function _parseMetadata(raw) {
+  if (raw === undefined || raw === null || raw === "") return null;
+  let obj;
+  try {
+    obj = typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch {
+    const e = new Error("metadata: JSON malformé");
+    e.status = 400;
+    throw e;
+  }
+  if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
+    const e = new Error("metadata: doit être un objet JSON (pas un tableau ni une primitive)");
+    e.status = 400;
+    throw e;
+  }
+  const serialized = JSON.stringify(obj);
+  if (Buffer.byteLength(serialized, "utf8") > 8 * 1024) {
+    const e = new Error("metadata: trop volumineuse (> 8 KB sérialisée)");
+    e.status = 400;
+    throw e;
+  }
+  return obj;
+}
+
 async function _buildValidatedConfig(req, mediaFiles) {
   let userConfig = {};
   if (req.body?.config) {
@@ -224,11 +260,13 @@ app.post(
           error: "Au moins un fichier média (media_0, media_1...) est requis.",
         });
       }
+      const userMetadata = _parseMetadata(req.body?.metadata);
       const validated = await _buildValidatedConfig(req, mediaFiles);
       const outputPath = path.resolve("outputs", `${uuidv4()}_final.mp4`);
       console.log(
         `[/render] start — media:${mediaFiles.length}, audio:${audioFile ? "yes" : "no"}, ` +
-        `music:${musicFile ? "yes" : "no"}, template:${req.body?.config ? "custom" : "default"}`
+        `music:${musicFile ? "yes" : "no"}, template:${req.body?.config ? "custom" : "default"}` +
+        (userMetadata ? `, metadata keys: [${Object.keys(userMetadata).join(", ")}]` : "")
       );
       const renderStart = Date.now();
       const { totalDurationSec } = await render({
@@ -259,6 +297,7 @@ app.post(
         transitions: validated.transitions.type,
         overlays_count: validated.overlays.length,
         elapsed_sec: parseFloat(elapsed),
+        ...(userMetadata !== null && { metadata: userMetadata }),
       });
     } catch (err) {
       console.error("/render KO:", err.message);
@@ -293,11 +332,13 @@ app.post(
       }
 
       // Webhook URL optionnelle (Make.com, n8n, Zapier, etc.)
-      // Validation immédiate avant d'enqueue : pas de webhook KO en silence.
       const webhookUrl = (req.body?.webhook_url || "").trim() || null;
       if (webhookUrl) {
         await validateWebhookUrl(webhookUrl); // throw 400 si KO
       }
+
+      // Metadata pass-through optionnelle : echo dans le webhook + dans /jobs/:id
+      const userMetadata = _parseMetadata(req.body?.metadata);
 
       const validated = await _buildValidatedConfig(req, mediaFiles);
       const outputPath = path.resolve("outputs", `${uuidv4()}_final.mp4`);
@@ -325,19 +366,14 @@ app.post(
 
           // Notification webhook (fire-and-forget, ne bloque pas le retour).
           if (webhookUrl) {
+            const basePayload = {
+              job_id: currentJobId,
+              finished_at: new Date().toISOString(),
+              ...(userMetadata !== null && { metadata: userMetadata }),
+            };
             const payload = renderError
-              ? {
-                  job_id: currentJobId,
-                  status: "failed",
-                  error: renderError.message,
-                  finished_at: new Date().toISOString(),
-                }
-              : {
-                  job_id: currentJobId,
-                  status: "completed",
-                  result,
-                  finished_at: new Date().toISOString(),
-                };
+              ? { ...basePayload, status: "failed", error: renderError.message }
+              : { ...basePayload, status: "completed", result };
             // On poste sans bloquer la fin du job, mais on stocke le résultat
             // dans le job pour que /jobs/:id le montre.
             postWebhook(webhookUrl, payload)
@@ -358,12 +394,14 @@ app.post(
           format: `${validated.format.width}x${validated.format.height}`,
           subtitle_mode: validated.subtitle.mode,
           webhook_url: webhookUrl || undefined,
+          user_metadata: userMetadata || undefined,
         }
       );
       return res.status(202).json({
         job_id: jobId,
         status_url: `${PUBLIC_BASE_URL}/jobs/${jobId}`,
         webhook_configured: !!webhookUrl,
+        metadata_received: userMetadata !== null,
       });
     } catch (err) {
       cleanupFiles(allFiles.map((f) => f.path));

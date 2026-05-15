@@ -714,6 +714,48 @@
           }
         },
         {
+          "name": "POST /render/async + webhook + metadata pass-through",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var data = pm.response.json();",
+                  "if (data.job_id) pm.environment.set('last_job_id', data.job_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "description": "Tu peux passer un champ `metadata` (JSON object) qui te sera ECHO-é tel quel dans le payload webhook ET dans GET /jobs/:id.\n\nCas d'usage : tu sais déjà à l'envoi où ranger la vidéo finale (dossier Drive, réseau social cible, ID client, etc.) — tu n'as pas besoin de logique en plus côté Make pour retrouver ce contexte.\n\nLe payload webhook reçu par Make ressemblera à :\n\n```json\n{\n  \"job_id\": \"...\",\n  \"status\": \"completed\",\n  \"result\": { \"downloadUrl\": \"...\", ... },\n  \"metadata\": {\n    \"folder\": \"Reels Q4 2026\",\n    \"social_network\": \"tiktok\",\n    \"client_id\": \"acme-corp\",\n    \"campaign\": \"launch-2026\"\n  },\n  \"finished_at\": \"...\"\n}\n```\n\nRègles :\n- Doit être un OBJET JSON (pas un tableau, pas une primitive)\n- Sérialisé < 8 KB\n- Le contenu est traité comme boîte noire, json2video ne l'interprète pas",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "config",
+                  "value": "{\"template\":\"reels-karaoke\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "webhook_url",
+                  "value": "https://hook.make.com/REMPLACE_PAR_TON_WEBHOOK_MAKE",
+                  "type": "text"
+                },
+                {
+                  "key": "metadata",
+                  "value": "{\n  \"folder\": \"Reels Q4 2026\",\n  \"social_network\": \"tiktok\",\n  \"client_id\": \"acme-corp\",\n  \"campaign\": \"launch-2026\",\n  \"language\": \"fr\",\n  \"scheduled_at\": \"2026-05-20T18:00:00Z\"\n}",
+                  "type": "text",
+                  "description": "Tout objet JSON, < 8 KB"
+                },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render/async", "host": ["{{base_url}}"], "path": ["render", "async"] }
+          }
+        },
+        {
           "name": "GET /jobs/:id (auto avec last_job_id)",
           "request": {
             "method": "GET",
