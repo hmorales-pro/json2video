@@ -1,0 +1,62 @@
+# ---------------------------------------------------------------
+# docker-compose.dokploy.yml — variante pour Dokploy (ou tout PaaS
+# qui gère son propre reverse proxy + HTTPS, type Coolify, Caprover,
+# CapRover, Render, etc.).
+#
+# Différences avec docker-compose.yml :
+#   - Pas de service Caddy (Dokploy/Traefik s'en charge)
+#   - Pas de mapping de ports public (Dokploy expose via Traefik)
+#   - cleanup sidecar conservé (pratique, ne consomme rien)
+#
+# Côté Dokploy :
+#   1) Application type : Docker Compose
+#   2) Source : Git + ce fichier (docker-compose.dokploy.yml)
+#   3) Service name dans la config Domaine : node-api
+#   4) Container Port : 3000
+# ---------------------------------------------------------------
+services:
+  node-api:
+    build: .
+    image: json2video:latest
+    container_name: json2video-node
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_PORT: 3000
+      PYTHON_BIN: python3
+      FFMPEG_BIN: ffmpeg
+      FFPROBE_BIN: ffprobe
+    expose:
+      - "3000"
+    volumes:
+      - uploads:/app/uploads
+      - outputs:/app/outputs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ >/dev/null || exit 0"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  cleanup:
+    image: alpine:3.20
+    container_name: json2video-cleanup
+    restart: unless-stopped
+    depends_on:
+      - node-api
+    volumes:
+      - uploads:/uploads
+      - outputs:/outputs
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          echo "[cleanup] $$(date) — nettoyage > 24h"
+          find /uploads -type f -mmin +1440 -delete 2>/dev/null || true
+          find /outputs -type f -mmin +1440 -delete 2>/dev/null || true
+          sleep 3600
+        done
+
+volumes:
+  uploads:
+  outputs:
