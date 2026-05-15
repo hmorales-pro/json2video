@@ -76,6 +76,14 @@ function cleanupFiles(paths) {
 // ---------------------------------------------------------------
 const app = express();
 app.disable("x-powered-by");
+
+// Derrière un reverse proxy (Traefik/Caddy/Nginx), on doit faire confiance
+// aux headers X-Forwarded-For pour identifier la vraie IP client.
+// La valeur 1 = on fait confiance UNIQUEMENT au 1er proxy de la chaîne
+// (Traefik chez Dokploy). C'est requis pour que express-rate-limit
+// fonctionne correctement.
+app.set("trust proxy", 1);
+
 app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 
