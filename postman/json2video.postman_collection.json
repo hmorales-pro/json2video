@@ -1,0 +1,732 @@
+{
+  "info": {
+    "name": "json2video — complète",
+    "description": "Collection exhaustive couvrant chaque paramètre disponible.\n\n## Setup\n\n1. Importer aussi `json2video.postman_environment.json`.\n2. Sélectionner l'environnement « json2video — local » (top droite).\n3. Remplir la variable `secret_api_key` avec la valeur de ton `.env`.\n4. Démarrer le serveur : `npm start` (port 3000).\n\nDans chaque requête `/render`, attache tes fichiers dans les champs marqués `[FILE]` (clique sur \"Select Files\").\n\n## Conventions multipart\n\n- `config` (text) : ta config JSON (voir descriptions)\n- `audio` (file) : voix-off (mp3/wav/m4a)\n- `music` (file) : musique de fond (optionnel)\n- `media_0`, `media_1`, ... : médias dans l'ordre (images ou vidéos)\n\nLa variable `last_job_id` est remplie automatiquement après /render/async.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "x-api-key", "type": "string" },
+      { "key": "value", "value": "{{secret_api_key}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "0. Health & discovery",
+      "item": [
+        {
+          "name": "GET / — healthcheck (no auth)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/", "host": ["{{base_url}}"], "path": [""] },
+            "auth": { "type": "noauth" }
+          }
+        },
+        {
+          "name": "GET /templates",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/templates", "host": ["{{base_url}}"], "path": ["templates"] }
+          }
+        },
+        {
+          "name": "GET /formats",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/formats", "host": ["{{base_url}}"], "path": ["formats"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Templates de base",
+      "item": [
+        {
+          "name": "Template reels-karaoke (9:16, karaoké)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\"}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "", "description": "[FILE] image" },
+                { "key": "media_1", "type": "file", "src": "", "description": "[FILE] image" },
+                { "key": "media_2", "type": "file", "src": "", "description": "[FILE] image" },
+                { "key": "audio",   "type": "file", "src": "", "description": "[FILE] voix-off" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Template youtube-captions (16:9, captions)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"youtube-captions\"}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Template square-quote (1:1)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"square-quote\"}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Template tiktok-storytime (9:16, karaoké centré)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"tiktok-storytime\"}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "media_1", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Gestion audio (audio_handling)",
+      "item": [
+        {
+          "name": "extend — freeze last (DÉFAUT)",
+          "request": {
+            "method": "POST",
+            "description": "Si l'audio dépasse la séquence, le dernier média est étendu : image plus longue, ou freeze frame pour une vidéo.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"audio_handling\":\"extend\"}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "media_1", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "loop — boucle dernière vidéo",
+          "request": {
+            "method": "POST",
+            "description": "Si le dernier média est une vidéo et l'audio plus long, la vidéo se rejoue en boucle.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"audio_handling\":\"loop\"}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "", "description": "[FILE] image intro" },
+                { "key": "media_1", "type": "file", "src": "", "description": "[FILE] vidéo qui sera bouclée" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "loop_all — boucle toute la séquence",
+          "request": {
+            "method": "POST",
+            "description": "Toute la séquence se répète jusqu'à couvrir l'audio. Cappé à K=50 répétitions.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"audio_handling\":\"loop_all\"}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "media_1", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "cut — audio coupé à la fin du visuel",
+          "request": {
+            "method": "POST",
+            "description": "Ancien comportement (-shortest). L'audio est coupé à la fin de la dernière vidéo.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"audio_handling\":\"cut\"}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Transitions xfade",
+      "item": [
+        {
+          "name": "fade (classique)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"transitions\":{\"type\":\"fade\",\"duration\":0.4}}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "media_1", "type": "file", "src": "" },
+                { "key": "media_2", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "dissolve",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"transitions\":{\"type\":\"dissolve\",\"duration\":0.5}}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "media_1", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "slideleft (cinétique)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"transitions\":{\"type\":\"slideleft\",\"duration\":0.6}}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "media_1", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "fadeblack (coupure dramatique)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"transitions\":{\"type\":\"fadeblack\",\"duration\":0.8}}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "media_1", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Toutes les valeurs possibles",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "data:none", "host": ["data:none"] }
+          },
+          "description": "Types disponibles : none, fade, fadeblack, fadewhite, dissolve, wipeleft, wiperight, wipeup, wipedown, slideleft, slideright, slideup, slidedown, smoothleft, smoothright, smoothup, smoothdown, circlecrop, rectcrop, distance, radial, zoomin\n\nDurée : 0.1 à 2.0 secondes."
+        }
+      ]
+    },
+    {
+      "name": "4. Modes de sous-titres",
+      "item": [
+        {
+          "name": "subtitle.mode = none (sans sous-titres)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"subtitle\":{\"mode\":\"none\"}}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "subtitle.mode = captions (blocs)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"subtitle\":{\"mode\":\"captions\",\"language\":\"fr\"}}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "subtitle.mode = karaoke (mot-à-mot)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"subtitle\":{\"mode\":\"karaoke\",\"language\":\"fr\"}}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Style sous-titres custom (taille, couleurs, position)",
+          "request": {
+            "method": "POST",
+            "description": "Override complet du style : police, taille, couleurs RGBA, alignement, marge, contour, ombre, gras, mots/ligne.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "config",
+                  "value": "{\n  \"template\": \"reels-karaoke\",\n  \"subtitle\": {\n    \"mode\": \"karaoke\",\n    \"language\": \"fr\",\n    \"style\": {\n      \"fontname\": \"DejaVu Sans\",\n      \"fontsize\": 56,\n      \"primary_color\": [255,255,255,0],\n      \"secondary_color\": [255,200,0,0],\n      \"outline_color\": [0,0,0,0],\n      \"back_color\": [0,0,0,160],\n      \"alignment\": 2,\n      \"margin_v\": 200,\n      \"outline\": 3,\n      \"shadow\": 2,\n      \"bold\": true,\n      \"max_words_per_line\": 3\n    }\n  }\n}",
+                  "type": "text"
+                },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Mix audio (voix + musique)",
+      "item": [
+        {
+          "name": "Voix-off seule",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"audio\":{\"voice_volume\":1.0}}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "", "description": "[FILE] voix-off" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Voix + musique (mix simple)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"audio\":{\"voice_volume\":1.0,\"music_volume\":0.3}}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "", "description": "[FILE] voix-off" },
+                { "key": "music",   "type": "file", "src": "", "description": "[FILE] musique de fond" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Voix + musique + ducking automatique",
+          "request": {
+            "method": "POST",
+            "description": "La musique baisse automatiquement quand la voix est présente (sidechain compress).",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"audio\":{\"voice_volume\":1.1,\"music_volume\":0.4,\"ducking\":true}}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" },
+                { "key": "music",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Overlays texte",
+      "item": [
+        {
+          "name": "Un overlay simple (titre en haut)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "config",
+                  "value": "{\n  \"template\": \"reels-karaoke\",\n  \"overlays\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"NOUVEAU\",\n      \"x\": \"center\",\n      \"y\": \"top\",\n      \"fontsize\": 60,\n      \"color\": \"#FFFFFF\",\n      \"bg_color\": \"#FF0000\",\n      \"bg_opacity\": 0.85\n    }\n  ]\n}",
+                  "type": "text"
+                },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Plusieurs overlays avec timing",
+          "request": {
+            "method": "POST",
+            "description": "Overlays affichés sur des plages temporelles spécifiques. Positions par mots-clés OU pixels.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "config",
+                  "value": "{\n  \"template\": \"reels-karaoke\",\n  \"overlays\": [\n    { \"type\":\"text\", \"text\":\"Intro\",   \"start\":0,  \"end\":3,  \"x\":\"left\",   \"y\":\"top\",    \"fontsize\":48, \"color\":\"#FFFFFF\", \"bg_color\":\"#000000\", \"bg_opacity\":0.7 },\n    { \"type\":\"text\", \"text\":\"@hugomorales\", \"start\":0, \"end\":99, \"x\":\"right\",  \"y\":\"bottom\", \"fontsize\":32, \"color\":\"#FFFFFF\" },\n    { \"type\":\"text\", \"text\":\"CTA: lien en bio\", \"start\":7, \"end\":12, \"x\":\"center\", \"y\":\"bottom\", \"fontsize\":56, \"color\":\"#FFFF00\", \"bg_color\":\"#000000\", \"bg_opacity\":0.8 }\n  ]\n}",
+                  "type": "text"
+                },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "media_1", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Position en pixels (placement précis)",
+          "request": {
+            "method": "POST",
+            "description": "x et y peuvent être des entiers (pixels) au lieu de mots-clés.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "config",
+                  "value": "{\"template\":\"reels-karaoke\",\"overlays\":[{\"type\":\"text\",\"text\":\"X=200 Y=900\",\"x\":200,\"y\":900,\"fontsize\":48,\"color\":\"#00FF00\"}]}",
+                  "type": "text"
+                },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Médias avancés",
+      "item": [
+        {
+          "name": "Durée auto (vidéo = durée audio)",
+          "request": {
+            "method": "POST",
+            "description": "Durée \"auto\" pour les images → réparties pour matcher la durée de l'audio.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"media\":[{\"duration\":\"auto\"},{\"duration\":\"auto\"},{\"duration\":\"auto\"}]}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "media_1", "type": "file", "src": "" },
+                { "key": "media_2", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Durées explicites par image",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"media\":[{\"duration\":1.5},{\"duration\":4},{\"duration\":2.5}]}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "media_1", "type": "file", "src": "" },
+                { "key": "media_2", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Mix image + vidéo",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"media\":[{\"duration\":3},{\"trim_start\":2,\"trim_end\":8},{\"duration\":\"auto\"}]}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "", "description": "[FILE] image" },
+                { "key": "media_1", "type": "file", "src": "", "description": "[FILE] vidéo (trim 2s-8s)" },
+                { "key": "media_2", "type": "file", "src": "", "description": "[FILE] image" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Modes fit : cover / contain / stretch",
+          "request": {
+            "method": "POST",
+            "description": "cover = crop pour remplir, contain = letterbox, stretch = déforme.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\",\"media\":[{\"duration\":3,\"fit\":\"cover\"},{\"duration\":3,\"fit\":\"contain\"},{\"duration\":3,\"fit\":\"stretch\"}]}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "media_1", "type": "file", "src": "" },
+                { "key": "media_2", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Formats vidéo",
+      "item": [
+        {
+          "name": "Format 9:16 (1080×1920)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"format\":\"9:16\",\"media\":[{\"duration\":3}]}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Format 16:9 (1920×1080)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"format\":\"16:9\",\"media\":[{\"duration\":3}]}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Format 1:1 (1080×1080)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"format\":\"1:1\",\"media\":[{\"duration\":3}]}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Format 4:5 (1080×1350) — Instagram portrait",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"format\":\"4:5\",\"media\":[{\"duration\":3}]}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Format 21:9 (2560×1080) — cinéma",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"format\":\"21:9\",\"media\":[{\"duration\":3}]}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        },
+        {
+          "name": "Format custom (dimensions libres)",
+          "request": {
+            "method": "POST",
+            "description": "Dimensions doivent être paires et entre 16 et 4096.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"format\":{\"width\":1280,\"height\":720},\"fps\":24,\"media\":[{\"duration\":3}],\"subtitle\":{\"mode\":\"none\"}}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. KITCHEN SINK — tous les paramètres",
+      "item": [
+        {
+          "name": "Tout activé (référence complète)",
+          "request": {
+            "method": "POST",
+            "description": "Exemple exhaustif référençant chaque champ de l'API.\n\nCHAMPS TOP-LEVEL :\n- template : preset (reels-karaoke | youtube-captions | square-quote | tiktok-storytime)\n- format : slug \"9:16|16:9|1:1|4:5|21:9\" OU {width, height}\n- fps : 12-60\n- background : hex #RRGGBB (couleur de fond pour fit:contain)\n- audio_handling : extend (défaut) | loop | loop_all | cut\n- subtitle : { mode, language, style }\n- transitions : { type, duration }\n- audio : { voice_volume, music_volume, ducking }\n- overlays : [{ type:text, text, start, end, x, y, fontsize, color, bg_color, bg_opacity }]\n- media : [{ type, duration, fit, trim_start, trim_end }]\n- output : { preset, crf }",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "config",
+                  "value": "{\n  \"template\": \"reels-karaoke\",\n  \"format\": \"9:16\",\n  \"fps\": 30,\n  \"background\": \"#000000\",\n  \"audio_handling\": \"extend\",\n\n  \"subtitle\": {\n    \"mode\": \"karaoke\",\n    \"language\": \"fr\",\n    \"style\": {\n      \"fontname\": \"DejaVu Sans\",\n      \"fontsize\": 64,\n      \"primary_color\":   [255,255,255,0],\n      \"secondary_color\": [0,230,255,0],\n      \"outline_color\":   [0,0,0,0],\n      \"back_color\":      [0,0,0,160],\n      \"alignment\": 2,\n      \"margin_v\": 240,\n      \"outline\": 3,\n      \"shadow\": 2,\n      \"bold\": true,\n      \"max_words_per_line\": 4\n    }\n  },\n\n  \"transitions\": {\n    \"type\": \"fade\",\n    \"duration\": 0.4\n  },\n\n  \"audio\": {\n    \"voice_volume\": 1.1,\n    \"music_volume\": 0.3,\n    \"ducking\": true\n  },\n\n  \"overlays\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"Cliquez le lien en bio\",\n      \"start\": 5,\n      \"end\": 8,\n      \"x\": \"center\",\n      \"y\": \"bottom\",\n      \"fontsize\": 56,\n      \"color\": \"#FFFF00\",\n      \"bg_color\": \"#000000\",\n      \"bg_opacity\": 0.8\n    }\n  ],\n\n  \"media\": [\n    { \"duration\": 2.5, \"fit\": \"cover\" },\n    { \"duration\": \"auto\", \"fit\": \"cover\" },\n    { \"trim_start\": 0, \"trim_end\": 4, \"fit\": \"cover\" }\n  ],\n\n  \"output\": {\n    \"preset\": \"medium\",\n    \"crf\": 20\n  }\n}",
+                  "type": "text"
+                },
+                { "key": "media_0", "type": "file", "src": "", "description": "[FILE] image 2.5s" },
+                { "key": "media_1", "type": "file", "src": "", "description": "[FILE] image durée auto" },
+                { "key": "media_2", "type": "file", "src": "", "description": "[FILE] vidéo trimée 0-4s" },
+                { "key": "audio",   "type": "file", "src": "", "description": "[FILE] voix-off" },
+                { "key": "music",   "type": "file", "src": "", "description": "[FILE] musique de fond" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render", "host": ["{{base_url}}"], "path": ["render"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "10. Render asynchrone (queue)",
+      "item": [
+        {
+          "name": "POST /render/async (sauvegarde job_id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var data = pm.response.json();",
+                  "if (data.job_id) {",
+                  "  pm.environment.set('last_job_id', data.job_id);",
+                  "  console.log('job_id sauvé:', data.job_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "config", "value": "{\"template\":\"reels-karaoke\"}", "type": "text" },
+                { "key": "media_0", "type": "file", "src": "" },
+                { "key": "audio",   "type": "file", "src": "" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/render/async", "host": ["{{base_url}}"], "path": ["render", "async"] }
+          }
+        },
+        {
+          "name": "GET /jobs/:id (auto avec last_job_id)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/jobs/{{last_job_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["jobs", "{{last_job_id}}"]
+            }
+          }
+        },
+        {
+          "name": "GET /jobs (liste tous les jobs)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/jobs", "host": ["{{base_url}}"], "path": ["jobs"] }
+          }
+        },
+        {
+          "name": "GET /jobs?status=processing (filtré)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/jobs?status=processing",
+              "host": ["{{base_url}}"],
+              "path": ["jobs"],
+              "query": [{ "key": "status", "value": "processing" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "11. Download",
+      "item": [
+        {
+          "name": "GET /download/:filename",
+          "description": "Remplace REMPLACE_PAR_LE_FICHIER.mp4 par le nom retourné dans `downloadUrl`.",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/download/REMPLACE_PAR_LE_FICHIER.mp4",
+              "host": ["{{base_url}}"],
+              "path": ["download", "REMPLACE_PAR_LE_FICHIER.mp4"]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:3000" }
+  ]
+}

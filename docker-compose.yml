@@ -1,0 +1,54 @@
+services:
+  # ---------------------------------------------------------------
+  # Pipeline Node + FFmpeg (recommandé)
+  # ---------------------------------------------------------------
+  node-api:
+    build: .
+    image: json2video:latest
+    container_name: json2video-node
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_PORT: 3000
+      PYTHON_BIN: python3
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./outputs:/app/outputs
+      # Monter le service-account GCP en lecture seule si l'app y accède
+      - ./credentials:/app/credentials:ro
+    command: ["node", "server.js"]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "wget -qO- http://localhost:3000/ >/dev/null || exit 0"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------
+  # Pipeline Flask + OpenCV (legacy, kept for compat)
+  # Décommenter si vous voulez aussi exposer l'API Python.
+  # ---------------------------------------------------------------
+  # flask-api:
+  #   image: json2video:latest
+  #   build: .
+  #   container_name: json2video-flask
+  #   depends_on:
+  #     - node-api
+  #   restart: unless-stopped
+  #   env_file: .env
+  #   environment:
+  #     FLASK_PORT: 5001
+  #     FLASK_HOST: 0.0.0.0
+  #     GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/service-account.json
+  #   ports:
+  #     - "127.0.0.1:5001:5001"
+  #   volumes:
+  #     - ./uploads:/app/uploads
+  #     - ./outputs:/app/outputs
+  #     - ./credentials:/app/credentials:ro
+  #   command:
+  #     ["gunicorn", "-w", "2", "-b", "0.0.0.0:5001", "--timeout", "600", "app:app"]

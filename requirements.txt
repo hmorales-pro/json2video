@@ -1,0 +1,22 @@
+# json2video — dépendances Python pour le pipeline Node
+#
+# Le serveur Node (server.js) appelle uniquement deux scripts Python
+# (words_to_ass.py et convert_srt_to_ass.py) qui n'utilisent que pysubs2.
+#
+# pip install -r requirements.txt
+pysubs2>=1.7.0
+
+# -----------------------------------------------------------------
+# Optionnel : legacy Flask pipeline (app.py + config.py)
+# Décommenter UNIQUEMENT si tu veux faire tourner aussi l'API Flask
+# parallèlement au Node. Sinon ces deps ne sont PAS nécessaires.
+# -----------------------------------------------------------------
+# flask>=3.0.0
+# python-dotenv>=1.0.0
+# opencv-python>=4.8.0
+# numpy>=1.26.0
+# pillow>=10.0.0
+# pydub>=0.25.1
+# google-cloud-speech>=2.24.0
+# google-cloud-storage>=2.16.0
+# gunicorn>=21.2.0

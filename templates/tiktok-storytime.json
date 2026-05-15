@@ -1,0 +1,33 @@
+{
+  "name": "tiktok-storytime",
+  "label": "TikTok storytime — karaoké, sous-titres au centre",
+  "format": "9:16",
+  "fps": 30,
+  "background": "#000000",
+  "default_media": {
+    "duration": "auto",
+    "fit": "cover"
+  },
+  "subtitle": {
+    "mode": "karaoke",
+    "language": "fr",
+    "style": {
+      "fontname": "DejaVu Sans",
+      "fontsize": 72,
+      "primary_color": [255, 255, 255, 0],
+      "secondary_color": [255, 230, 0, 0],
+      "outline_color": [0, 0, 0, 0],
+      "back_color": [0, 0, 0, 192],
+      "alignment": 5,
+      "margin_v": 0,
+      "outline": 4,
+      "shadow": 2,
+      "bold": true,
+      "max_words_per_line": 3
+    }
+  },
+  "output": {
+    "preset": "medium",
+    "crf": 20
+  }
+}

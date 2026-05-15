@@ -1,0 +1,32 @@
+{
+  "name": "square-quote",
+  "label": "Instagram square — citation centrée",
+  "format": "1:1",
+  "fps": 30,
+  "background": "#000000",
+  "default_media": {
+    "duration": "auto",
+    "fit": "cover"
+  },
+  "subtitle": {
+    "mode": "captions",
+    "language": "fr",
+    "style": {
+      "fontname": "DejaVu Sans",
+      "fontsize": 56,
+      "primary_color": [255, 255, 255, 0],
+      "outline_color": [0, 0, 0, 0],
+      "back_color": [0, 0, 0, 180],
+      "alignment": 5,
+      "margin_v": 0,
+      "outline": 3,
+      "shadow": 2,
+      "bold": true,
+      "max_words_per_line": 5
+    }
+  },
+  "output": {
+    "preset": "medium",
+    "crf": 19
+  }
+}

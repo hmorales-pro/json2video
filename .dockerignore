@@ -1,0 +1,36 @@
+# Ne JAMAIS copier les secrets dans l'image
+.env
+.env.*
+!.env.example
+config.py
+client_secret*.json
+json2video-*.json
+*-credentials.json
+service-account*.json
+credentials/
+
+# Dossiers runtime (montés en volume)
+uploads/
+outputs/
+
+# Dépendances locales
+node_modules/
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Git / éditeurs
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+*.log
+nohup.out
+
+# Docs/Scripts de dev
+README.md
+scripts/

@@ -1,18 +1,34 @@
-# Fichiers Python compilés
+# ---------------------------------------------------------------
+# Secrets — NEVER commit these
+# ---------------------------------------------------------------
+.env
+.env.*
+!.env.example
+config.py
+
+# Google Cloud credentials (service account & OAuth client)
+client_secret*.json
+*-credentials.json
+*service-account*.json
+google-credentials.json
+gcp-*.json
+# Project-specific credential files (UUID-style names)
+json2video-*.json
+
+# AWS credentials
+.aws/
+credentials
+
+# ---------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Environnement virtuel
 venv/
 ENV/
 env/
 .Python
-
-# Fichier d'environnement (ne jamais versionner les secrets)
-.env
-
-# Dossiers de distribution / packaging
 build/
 develop-eggs/
 dist/
@@ -28,17 +44,37 @@ var/
 .installed.cfg
 *.egg
 
-# Logs et fichiers temporaires
+# ---------------------------------------------------------------
+# Node
+# ---------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ---------------------------------------------------------------
+# Logs & temporaires
+# ---------------------------------------------------------------
 *.log
+nohup.out
 pip-log.txt
 pip-delete-this-directory.txt
 .cache/
 .mypy_cache/
 
-# Dossiers spécifiques aux éditeurs
+# ---------------------------------------------------------------
+# Éditeurs / OS
+# ---------------------------------------------------------------
 .vscode/
 .idea/
+.DS_Store
+**/.DS_Store
+Thumbs.db
 
-# Inputs / outputs de ton application
+# ---------------------------------------------------------------
+# Inputs / outputs de l'application
+# ---------------------------------------------------------------
 uploads/
 outputs/
+!uploads/.gitkeep
+!outputs/.gitkeep

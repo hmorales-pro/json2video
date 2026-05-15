@@ -1,25 +1,37 @@
-from flask import Flask, request, jsonify, send_file, send_from_directory, Response, render_template_string
-import os
-import uuid
-import subprocess
-import cv2
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-from dotenv import load_dotenv
-from google.cloud import speech
-from pydub import AudioSegment
-import tempfile
+"""
+Génération de vidéos avec sous-titres (pipeline Python / Google Speech).
 
+Endpoints :
+    POST /generate-video   (auth X-Api-Key)
+    GET  /outputs/<file>   (auth X-Api-Key)
+    GET  /monitor          (Basic auth)
+    GET  /logs             (Basic auth)
+"""
+import hmac
+import os
+import re
+import subprocess
+import tempfile
+import uuid
 from functools import wraps
 
-# On importe la clé depuis un fichier config.py
-import config
+import cv2
+import numpy as np
+from dotenv import load_dotenv
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    render_template_string,
+    request,
+    send_from_directory,
+)
+from google.cloud import speech
+from PIL import Image, ImageDraw, ImageFont
+from pydub import AudioSegment
 
-# Définir des identifiants en dur
-USERNAME = "admin"
-PASSWORD = "monMotDePasse"
+import config  # nos paramètres applicatifs (chargent .env)
 
-# Charger les variables d'environnement
 load_dotenv()
 
 app = Flask(__name__)
@@ -29,391 +41,337 @@ OUTPUT_FOLDER = "outputs"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-ALLOWED_AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a'}
+ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a"}
+ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif"}
+SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
-# ---------------------------------------------------
-# Vérification de la clé d'API
-# ---------------------------------------------------
+# Multer-équivalent : limiter la taille des uploads (anti-DoS).
+app.config["MAX_CONTENT_LENGTH"] = config.MAX_UPLOAD_MB * 1024 * 1024
+
+
+# ---------------------------------------------------------------
+# Auth API key — comparaison constant-time
+# ---------------------------------------------------------------
 @app.before_request
 def check_api_key():
-    # Autoriser l'accès aux routes 'index' et 'monitor' sans API key.
-    if request.endpoint in ['index', 'monitor', 'get_logs']:
-        return
-    
-    provided_key = request.headers.get('X-Api-Key') or request.args.get('api_key')
-    if provided_key != config.SECRET_API_KEY:
+    # Routes publiques (l'auth Basic dédiée s'en charge le cas échéant).
+    if request.endpoint in {"index", "monitor", "get_logs"}:
+        return None
+
+    provided_key = request.headers.get("X-Api-Key") or request.args.get("api_key")
+    if not provided_key or not hmac.compare_digest(provided_key, config.SECRET_API_KEY):
         return jsonify({"error": "Invalid or missing API key"}), 401
+    return None
 
-# ---------------------------------------------------
-# Fonctions utilitaires
-# ---------------------------------------------------
 
+# ---------------------------------------------------------------
+# Utilitaires
+# ---------------------------------------------------------------
 def read_image(image_path, target_size=None):
-    """
-    Essaie de lire une image avec cv2.imread.
-    Si cela échoue (par exemple pour un GIF), utilise Pillow pour ouvrir l'image, la convertir en RGB,
-    puis la convertit en BGR (format OpenCV). Optionnellement, redimensionne l'image à target_size (largeur, hauteur).
-    """
-    import cv2
-    import numpy as np
-    from PIL import Image
+    """Lit une image en BGR (OpenCV) avec fallback Pillow pour GIF/exotiques."""
     img = cv2.imread(image_path)
     if img is None:
         try:
             pil_img = Image.open(image_path).convert("RGB")
-            img = np.array(pil_img)
-            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-            print(f"Image {image_path} chargée via Pillow.")
+            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         except Exception as e:
-            print(f"Erreur lors de la lecture de l'image {image_path} avec Pillow : {e}")
+            print(f"[read_image] Échec sur {image_path}: {e}")
             return None
     if target_size is not None:
         try:
             img = cv2.resize(img, target_size)
         except Exception as e:
-            print(f"Erreur lors du redimensionnement de l'image {image_path}: {e}")
+            print(f"[read_image] Erreur resize {image_path}: {e}")
             return None
     return img
 
+
 def parse_time(time_str):
-    hours, minutes, seconds_millis = time_str.split(':')
-    seconds, millis = seconds_millis.split(',')
-    total_seconds = int(hours) * 3600 + int(minutes) * 60 + int(seconds) + int(millis) / 1000.0
-    return total_seconds
+    hours, minutes, seconds_millis = time_str.split(":")
+    seconds, millis = seconds_millis.split(",")
+    return (
+        int(hours) * 3600
+        + int(minutes) * 60
+        + int(seconds)
+        + int(millis) / 1000.0
+    )
+
 
 def read_srt(srt_path):
+    """Parser SRT minimaliste mais robuste aux lignes vides multiples."""
     subtitles = []
-    with open(srt_path, 'r', encoding='utf-8') as f:
+    with open(srt_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
-    current_sub = {"start_time": None, "end_time": None, "text": ""}
+    current = {"start_time": None, "end_time": None, "text": ""}
     for line in lines:
         line = line.strip()
         if line.isdigit():
-            if current_sub["start_time"] is not None:
-                subtitles.append((current_sub["start_time"], current_sub["end_time"], current_sub["text"].strip()))
-            current_sub = {"start_time": None, "end_time": None, "text": ""}
-        elif '-->' in line:
-            start, end = line.split('-->')
-            current_sub["start_time"] = parse_time(start.strip())
-            current_sub["end_time"] = parse_time(end.strip())
+            if current["start_time"] is not None:
+                subtitles.append(
+                    (current["start_time"], current["end_time"], current["text"].strip())
+                )
+            current = {"start_time": None, "end_time": None, "text": ""}
+        elif "-->" in line:
+            start, end = line.split("-->")
+            current["start_time"] = parse_time(start.strip())
+            current["end_time"] = parse_time(end.strip())
         elif line:
-            current_sub["text"] += ' ' + line
-    if current_sub["start_time"] is not None:
-        subtitles.append((current_sub["start_time"], current_sub["end_time"], current_sub["text"].strip()))
+            current["text"] += " " + line
+    if current["start_time"] is not None:
+        subtitles.append(
+            (current["start_time"], current["end_time"], current["text"].strip())
+        )
     return subtitles
 
-def resize_and_validate_images(image_paths, orientation='landscape'):
-    output_size = (1280, 720) if orientation == 'landscape' else (720, 1280)
-    valid_images = []
-    for img_path in image_paths:
-        try:
-            img = Image.open(img_path)
-            img = img.resize(output_size, Image.LANCZOS)
-            resized_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}_resized.png")
-            img.save(resized_path)
-            valid_images.append(resized_path)
-        except Exception as e:
-            print(f"Erreur lors de la validation de l'image {img_path} : {e}")
-    return valid_images
 
 def convert_audio_to_wav(audio_path, output_path):
-    import subprocess
-    result = subprocess.run([
-        'ffmpeg', '-y', '-i', audio_path, '-acodec', 'pcm_s16le',
-        '-ac', '1', '-ar', '44100', output_path
-    ], capture_output=True, text=True)
-    print("FFmpeg audio conversion stdout:", result.stdout)
-    print("FFmpeg audio conversion stderr:", result.stderr)
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", audio_path,
+            "-acodec", "pcm_s16le", "-ac", "1", "-ar", "44100",
+            output_path,
+        ],
+        capture_output=True, text=True, check=False,
+    )
     if not os.path.exists(output_path):
-        raise FileNotFoundError(f"Le fichier WAV n'a pas été créé : {output_path}\nFFmpeg stderr: {result.stderr}")
+        raise FileNotFoundError(
+            f"WAV non créé : {output_path}\nFFmpeg stderr: {result.stderr}"
+        )
 
 
-# ---------------------------------------------------
-# Transcription – Deux modes selon la durée de l'audio
-# ---------------------------------------------------
+def is_valid_audio_file(filename: str) -> bool:
+    return os.path.splitext(filename)[1].lower() in ALLOWED_AUDIO_EXTENSIONS
+
+
+def is_valid_image_file(filename: str) -> bool:
+    return os.path.splitext(filename)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
+
+
+# ---------------------------------------------------------------
+# Transcription Google Speech
+# ---------------------------------------------------------------
 def transcribe_audio_in_chunks(audio_path, chunk_duration_ms=30000, language_code="fr-FR"):
-    from pydub import AudioSegment
     audio_segment = AudioSegment.from_wav(audio_path)
     total_duration_ms = len(audio_segment)
     transcription_data = []
     client = speech.SpeechClient()
-    
+
     for start_ms in range(0, total_duration_ms, chunk_duration_ms):
         end_ms = min(start_ms + chunk_duration_ms, total_duration_ms)
         chunk = audio_segment[start_ms:end_ms]
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as chunk_file:
             chunk_path = chunk_file.name
             chunk.export(chunk_path, format="wav")
-        with open(chunk_path, "rb") as audio_file:
-            audio_content = audio_file.read()
-        audio = speech.RecognitionAudio(content=audio_content)
-        config = speech.RecognitionConfig(
-            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-            sample_rate_hertz=44100,
-            language_code=language_code,
-            enable_word_time_offsets=True
-        )
         try:
-            response = client.recognize(config=config, audio=audio)
+            with open(chunk_path, "rb") as audio_file:
+                audio_content = audio_file.read()
+            audio = speech.RecognitionAudio(content=audio_content)
+            recognition_config = speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                sample_rate_hertz=44100,
+                language_code=language_code,
+                enable_word_time_offsets=True,
+            )
+            response = client.recognize(config=recognition_config, audio=audio)
             for result in response.results:
                 for word_info in result.alternatives[0].words:
-                    transcription_data.append({
-                        "word": word_info.word,
-                        "start": word_info.start_time.total_seconds() + start_ms / 1000,
-                        "end": word_info.end_time.total_seconds() + start_ms / 1000
-                    })
+                    transcription_data.append(
+                        {
+                            "word": word_info.word,
+                            "start": word_info.start_time.total_seconds() + start_ms / 1000,
+                            "end": word_info.end_time.total_seconds() + start_ms / 1000,
+                        }
+                    )
         except Exception as e:
-            print(f"Erreur lors de la transcription du segment : {e}")
-        os.remove(chunk_path)
+            print(f"[transcribe_audio_in_chunks] segment KO : {e}")
+        finally:
+            if os.path.exists(chunk_path):
+                os.remove(chunk_path)
     return transcription_data
+
 
 def transcribe_audio_long(audio_path, language_code="fr-FR"):
     client = speech.SpeechClient()
-    # Upload the audio file to GCS
     destination_blob_name = f"audio/{os.path.basename(audio_path)}"
     gcs_uri = upload_file_to_gcs(audio_path, destination_blob_name)
-    
+
     audio = speech.RecognitionAudio(uri=gcs_uri)
-    config = speech.RecognitionConfig(
+    recognition_config = speech.RecognitionConfig(
         encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
         sample_rate_hertz=44100,
         language_code=language_code,
-        enable_word_time_offsets=True
+        enable_word_time_offsets=True,
     )
-    
-    print("Attente de la transcription asynchrone pour audio long...")
-    operation = client.long_running_recognize(config=config, audio=audio)
-    response = operation.result(timeout=600)  # Ajuste le timeout si nécessaire
-    
+
+    operation = client.long_running_recognize(config=recognition_config, audio=audio)
+    response = operation.result(timeout=600)
+
     transcription_data = []
     for result in response.results:
         for word_info in result.alternatives[0].words:
-            transcription_data.append({
-                "word": word_info.word,
-                "start": word_info.start_time.total_seconds(),
-                "end": word_info.end_time.total_seconds()
-            })
+            transcription_data.append(
+                {
+                    "word": word_info.word,
+                    "start": word_info.start_time.total_seconds(),
+                    "end": word_info.end_time.total_seconds(),
+                }
+            )
     return transcription_data
 
+
 def transcribe_audio(audio_path, chunk_duration_ms=30000, threshold_sec=60, language_code="fr-FR"):
-    from pydub import AudioSegment
     audio_segment = AudioSegment.from_wav(audio_path)
     duration_sec = len(audio_segment) / 1000.0
     if duration_sec <= threshold_sec:
-        print("Utilisation de la transcription synchrone en chunks")
         return transcribe_audio_in_chunks(audio_path, chunk_duration_ms, language_code)
-    else:
-        print("Utilisation de la transcription asynchrone pour audio long")
-        return transcribe_audio_long(audio_path, language_code)
+    return transcribe_audio_long(audio_path, language_code)
 
-# ---------------------------------------------------
-# Génération des sous-titres (SRT)
-# ---------------------------------------------------
+
+# ---------------------------------------------------------------
+# Génération SRT
+# ---------------------------------------------------------------
+def _format_timestamp(seconds: float) -> str:
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millisecs = int((seconds - int(seconds)) * 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millisecs:03d}"
+
+
 def generate_srt_subtitles(transcription_data, srt_path):
     phrases = []
     current_phrase = []
     current_start = None
     for word_info in transcription_data:
-        if not current_start:
-            current_start = word_info['start']
-        current_phrase.append(word_info['word'])
-        if len(current_phrase) >= 5 or (word_info.get('pause', False)):
-            phrases.append({
-                'start': current_start,
-                'end': word_info['end'],
-                'text': ' '.join(current_phrase)
-            })
+        # Bugfix : on testait `if not current_start` ; 0.0 est falsy → KO.
+        if current_start is None:
+            current_start = word_info["start"]
+        current_phrase.append(word_info["word"])
+        if len(current_phrase) >= 5 or word_info.get("pause", False):
+            phrases.append(
+                {
+                    "start": current_start,
+                    "end": word_info["end"],
+                    "text": " ".join(current_phrase),
+                }
+            )
             current_phrase = []
             current_start = None
     if current_phrase:
-        phrases.append({
-            'start': current_start,
-            'end': transcription_data[-1]['end'],
-            'text': ' '.join(current_phrase)
-        })
-    with open(srt_path, 'w', encoding='utf-8') as srt_file:
+        phrases.append(
+            {
+                "start": current_start,
+                "end": transcription_data[-1]["end"],
+                "text": " ".join(current_phrase),
+            }
+        )
+    with open(srt_path, "w", encoding="utf-8") as srt_file:
         for i, phrase in enumerate(phrases, start=1):
-            def format_timestamp(seconds):
-                hours = int(seconds // 3600)
-                minutes = int((seconds % 3600) // 60)
-                secs = int(seconds % 60)
-                millisecs = int((seconds - int(seconds)) * 1000)
-                return f"{hours:02d}:{minutes:02d}:{secs:02d},{millisecs:03d}"
             srt_file.write(f"{i}\n")
-            srt_file.write(f"{format_timestamp(phrase['start'])} --> {format_timestamp(phrase['end'])}\n")
+            srt_file.write(
+                f"{_format_timestamp(phrase['start'])} --> {_format_timestamp(phrase['end'])}\n"
+            )
             srt_file.write(f"{phrase['text']}\n\n")
-    print(f"Fichier SRT généré : {srt_path}")
+
 
 def upload_file_to_gcs(source_file_name, destination_blob_name):
-    """
-    Uploads a file to a Google Cloud Storage bucket and returns the GCS URI.
-    """
     from google.cloud import storage
-    bucket_name = os.getenv("GCS_BUCKET")
+
+    bucket_name = config.GCS_BUCKET
     if not bucket_name:
-        raise ValueError("GCS_BUCKET environment variable is not set")
-    
+        raise ValueError("GCS_BUCKET non défini (cf. .env)")
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
     blob = bucket.blob(destination_blob_name)
     blob.upload_from_filename(source_file_name)
-    
-    # Optionally, you can make the blob public:
-    # blob.make_public()
     return f"gs://{bucket_name}/{destination_blob_name}"
 
 
-# ---------------------------------------------------
-# Fonctions pour dessiner le texte avec fond "Instagram"
-# ---------------------------------------------------
-def draw_text_pil(frame, text, x, y,
-                  font_path="DejaVuSans.ttf", font_size=24,
-                  text_color=(255, 255, 255),
-                  stroke_color=(0, 0, 0), stroke_width=2,
-                  bg_color=None, padding=5):
-    """
-    Dessine du texte (UNE SEULE LIGNE) sur `frame` (OpenCV) via Pillow.
-    Si bg_color est défini, un rectangle de fond est dessiné derrière cette ligne.
-    """
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    pil_image = Image.fromarray(frame_rgb)
-    draw = ImageDraw.Draw(pil_image)
-    try:
-        font = ImageFont.truetype(font_path, font_size)
-    except IOError:
-        print(f"Erreur: police '{font_path}' non trouvée. Utilisation de la police par défaut.")
-        font = ImageFont.load_default()
-    if bg_color is not None:
-        bbox = draw.textbbox((x, y), text, font=font, stroke_width=stroke_width)
-        bg_x0 = bbox[0] - padding
-        bg_y0 = bbox[1] - padding
-        bg_x1 = bbox[2] + padding
-        bg_y1 = bbox[3] + padding
-        draw.rectangle([bg_x0, bg_y0, bg_x1, bg_y1], fill=bg_color)
-    draw.text((x, y), text, font=font, fill=text_color,
-              stroke_width=stroke_width, stroke_fill=stroke_color)
-    frame_bgr = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-    return frame_bgr
-
-# ---------------------------------------------------
-# Fusion audio + vidéo avec ffmpeg
-# ---------------------------------------------------
-def merge_audio_and_video(video_path, audio_path, output_path):
-    import subprocess
-    cmd = [
-        'ffmpeg', '-y',
-        '-i', video_path,
-        '-i', audio_path,
-        '-c:v', 'libx264',
-        '-preset', 'veryfast',
-        '-crf', '23',
-        '-c:a', 'aac',
-        '-shortest',
-        output_path
-    ]
-    subprocess.run(cmd, check=True)
-
-# ---------------------------------------------------
-# Fonction de découpe en lignes (wrap text)
-# ---------------------------------------------------
+# ---------------------------------------------------------------
+# Wrap texte
+# ---------------------------------------------------------------
 def wrap_text_by_width(draw, text, font, max_width):
-    """
-    Découpe `text` en plusieurs lignes pour qu'aucune ne dépasse `max_width`.
-    Retourne une liste de lignes.
-    """
     words = text.split()
     lines = []
     current_line = []
     for word in words:
-        test_line = ' '.join(current_line + [word])
+        test_line = " ".join(current_line + [word])
         bbox = draw.textbbox((0, 0), test_line, font=font)
         line_width = bbox[2] - bbox[0]
         if line_width <= max_width:
             current_line.append(word)
         else:
-            lines.append(' '.join(current_line))
+            if current_line:
+                lines.append(" ".join(current_line))
             current_line = [word]
     if current_line:
-        lines.append(' '.join(current_line))
+        lines.append(" ".join(current_line))
     return lines
 
-def is_valid_audio_file(filename):
-    ext = os.path.splitext(filename)[1].lower()
-    return ext in ALLOWED_AUDIO_EXTENSIONS
 
-# ---------------------------------------------------
-# Génération vidéo avec sous-titres "Instagram"
-# ---------------------------------------------------
-def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, output_path,
-                                         fps=24, font_path="DejaVuSans.ttf", font_size=24,
-                                         max_width=1280, max_height=720,
-                                         generate_subtitles=True):
-    try:
-        print("Lecture des sous-titres depuis", srt_path)
-        subtitles = read_srt(srt_path)
-    except Exception as e:
-        print("Erreur lors de la lecture du fichier SRT :", e)
-        raise
+# ---------------------------------------------------------------
+# Fusion FFmpeg
+# ---------------------------------------------------------------
+def merge_audio_and_video(video_path, audio_path, output_path):
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-i", audio_path,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart",
+            "-shortest",
+            output_path,
+        ],
+        check=True,
+    )
 
-    try:
-        print("Lecture de l'audio depuis", audio_path)
-        from pydub import AudioSegment
-        audio = AudioSegment.from_file(audio_path)
-    except Exception as e:
-        print("Erreur lors de la lecture de l'audio :", e)
-        raise
 
-    total_duration_ms = len(audio)
-    total_duration_sec = total_duration_ms / 1000.0
+# ---------------------------------------------------------------
+# Génération vidéo
+# ---------------------------------------------------------------
+def generate_video_with_subtitles_opencv(
+    image_paths, audio_path, srt_path, output_path,
+    fps=24, font_path="DejaVuSans.ttf", font_size=24,
+    max_width=1280, max_height=720,
+    generate_subtitles=True,
+):
+    subtitles = read_srt(srt_path) if generate_subtitles else []
+    audio = AudioSegment.from_file(audio_path)
+    total_duration_sec = len(audio) / 1000.0
 
     if not image_paths:
         raise ValueError("Aucune image fournie.")
-    try:
-        # Utiliser read_image (voir fonction ci-dessous) pour gérer différents formats
-        first_img = read_image(image_paths[0])
-        if first_img is None:
-            raise ValueError("Impossible de lire l'image: " + image_paths[0])
-        orig_height, orig_width, _ = first_img.shape
-    except Exception as e:
-        print("Erreur lors de la lecture de la première image :", e)
-        raise
+    first_img = read_image(image_paths[0])
+    if first_img is None:
+        raise ValueError(f"Impossible de lire l'image: {image_paths[0]}")
+    orig_height, orig_width, _ = first_img.shape
 
-    # Redimensionnement global si nécessaire
     width, height = orig_width, orig_height
     if width > max_width or height > max_height:
         ratio = min(max_width / width, max_height / height)
-        new_width = int(width * ratio)
-        new_height = int(height * ratio)
-        print(f"Redimensionnement: {width}x{height} -> {new_width}x{new_height}")
-        width, height = new_width, new_height
-    else:
-        print(f"Dimensions utilisées: {width}x{height}")
+        width = int(width * ratio)
+        height = int(height * ratio)
 
     total_frames = int(total_duration_sec * fps)
     segment_duration_sec = total_duration_sec / len(image_paths)
-    print(f"Durée totale : {total_duration_sec:.2f} s, {total_frames} frames.")
 
-    # Création du VideoWriter
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    silent_video_path = output_path.replace('.mp4', '_silent.mp4')
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    silent_video_path = output_path.replace(".mp4", "_silent.mp4")
     out = cv2.VideoWriter(silent_video_path, fourcc, fps, (width, height))
     if not out.isOpened():
-        raise Exception("Le VideoWriter n'a pas pu être ouvert.")
+        raise Exception("VideoWriter non ouvert.")
 
     global_frame_index = 0
-    num_images = len(image_paths)
-    print("Début de l'écriture des frames...")
     try:
-        for idx, img_path in enumerate(image_paths):
-            print(f"Traitement de l'image {idx+1}/{num_images}: {img_path}")
-            # Utiliser read_image pour charger et redimensionner l'image
+        for img_path in image_paths:
             img_original = read_image(img_path, target_size=(width, height))
             if img_original is None:
-                print("Avertissement : image ignorée -", img_path)
                 continue
             frames_for_this_image = int(segment_duration_sec * fps)
-            for i in range(frames_for_this_image):
+            for _ in range(frames_for_this_image):
                 current_time = global_frame_index / fps
                 current_subtitle = None
                 if generate_subtitles:
@@ -424,154 +382,195 @@ def generate_video_with_subtitles_opencv(image_paths, audio_path, srt_path, outp
 
                 frame = img_original.copy()
                 if generate_subtitles and current_subtitle:
-                    # Traitement du sous-titre sur la frame
-                    dummy_img = Image.new("RGB", (width, height))
-                    draw_dummy = ImageDraw.Draw(dummy_img)
-                    try:
-                        font_pil = ImageFont.truetype(font_path, font_size)
-                    except IOError:
-                        print(f"Erreur: police '{font_path}' non trouvée. Utilisation de la police par défaut.")
-                        font_pil = ImageFont.load_default()
-                    max_text_width = int(width * 0.8)
-                    lines = wrap_text_by_width(draw_dummy, current_subtitle, font_pil, max_text_width)
-                    max_line_width = 0
-                    total_text_height = 0
-                    line_heights = []
-                    for ln in lines:
-                        bbox_ln = draw_dummy.textbbox((0, 0), ln, font=font_pil)
-                        ln_width = bbox_ln[2] - bbox_ln[0]
-                        ln_height = bbox_ln[3] - bbox_ln[1]
-                        max_line_width = max(max_line_width, ln_width)
-                        line_heights.append(ln_height)
-                        total_text_height += ln_height
-
-                    block_x_center = width // 2
-                    block_y_center = height // 2
-                    block_padding = 20
-                    block_left   = block_x_center - (max_line_width // 2) - block_padding
-                    block_top    = block_y_center - (total_text_height // 2) - block_padding
-                    block_right  = block_x_center + (max_line_width // 2) + block_padding
-                    block_bottom = block_y_center + (total_text_height // 2) + block_padding
-
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    pil_image = Image.fromarray(frame_rgb)
-                    draw = ImageDraw.Draw(pil_image)
-                    draw.rectangle([block_left, block_top, block_right, block_bottom], fill=(0, 0, 0))
-                    current_y = block_top + block_padding
-                    for i, ln in enumerate(lines):
-                        bbox_ln = draw.textbbox((0, 0), ln, font=font_pil)
-                        real_line_width = bbox_ln[2] - bbox_ln[0]
-                        line_x = block_x_center - (real_line_width // 2)
-                        draw.text(
-                            (line_x, current_y),
-                            ln,
-                            font=font_pil,
-                            fill=(255, 255, 255),
-                            stroke_width=2,
-                            stroke_fill=(0, 0, 0)
-                        )
-                        current_y += line_heights[i]
-                    frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+                    frame = _draw_subtitle_block(
+                        frame, current_subtitle, font_path, font_size, width, height
+                    )
                 out.write(frame)
                 global_frame_index += 1
-                if global_frame_index % 500 == 0:
-                    print(f"{global_frame_index} frames traitées...")
-    except Exception as e:
-        print("Erreur lors du traitement des frames :", e)
+                if global_frame_index >= total_frames:
+                    break
+            if global_frame_index >= total_frames:
+                break
+    finally:
         out.release()
-        raise
 
-    out.release()
-    print("Frames écrites. Début de la fusion audio/vidéo...")
     try:
         merge_audio_and_video(silent_video_path, audio_path, output_path)
-        print("Fusion audio/vidéo terminée.")
-    except Exception as e:
-        print("Erreur lors de la fusion audio/vidéo :", e)
-        raise
-
-    if os.path.exists(silent_video_path):
-        os.remove(silent_video_path)
-    print(f"Vidéo finale générée : {output_path}")
+    finally:
+        if os.path.exists(silent_video_path):
+            os.remove(silent_video_path)
 
 
-# ---------------------------------------------------
-# Routes Flask
-# ---------------------------------------------------
-@app.route('/outputs/<path:filename>')
+def _draw_subtitle_block(frame, text, font_path, font_size, width, height):
+    """Dessine un bloc de sous-titre centré (style Instagram) sur la frame."""
+    try:
+        font_pil = ImageFont.truetype(font_path, font_size)
+    except IOError:
+        font_pil = ImageFont.load_default()
+
+    dummy_img = Image.new("RGB", (width, height))
+    draw_dummy = ImageDraw.Draw(dummy_img)
+    max_text_width = int(width * 0.8)
+    lines = wrap_text_by_width(draw_dummy, text, font_pil, max_text_width)
+
+    max_line_width = 0
+    total_text_height = 0
+    line_heights = []
+    for ln in lines:
+        bbox_ln = draw_dummy.textbbox((0, 0), ln, font=font_pil)
+        ln_width = bbox_ln[2] - bbox_ln[0]
+        ln_height = bbox_ln[3] - bbox_ln[1]
+        max_line_width = max(max_line_width, ln_width)
+        line_heights.append(ln_height)
+        total_text_height += ln_height
+
+    block_x_center = width // 2
+    block_y_center = height // 2
+    pad = 20
+    left = block_x_center - (max_line_width // 2) - pad
+    top = block_y_center - (total_text_height // 2) - pad
+    right = block_x_center + (max_line_width // 2) + pad
+    bottom = block_y_center + (total_text_height // 2) + pad
+
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    pil_image = Image.fromarray(frame_rgb)
+    draw = ImageDraw.Draw(pil_image)
+    draw.rectangle([left, top, right, bottom], fill=(0, 0, 0))
+    current_y = top + pad
+    for idx, ln in enumerate(lines):
+        bbox_ln = draw.textbbox((0, 0), ln, font=font_pil)
+        real_line_width = bbox_ln[2] - bbox_ln[0]
+        line_x = block_x_center - (real_line_width // 2)
+        draw.text(
+            (line_x, current_y),
+            ln,
+            font=font_pil,
+            fill=(255, 255, 255),
+            stroke_width=2,
+            stroke_fill=(0, 0, 0),
+        )
+        current_y += line_heights[idx]
+    return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+
+
+# ---------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------
+@app.route("/outputs/<path:filename>")
 def serve_output(filename):
-    return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True, mimetype='video/mp4')
+    # Empêche les noms de fichier exotiques (path traversal, caractères de contrôle).
+    if not SAFE_FILENAME_RE.match(filename):
+        return jsonify({"error": "Nom de fichier invalide"}), 400
+    return send_from_directory(
+        OUTPUT_FOLDER, filename, as_attachment=True, mimetype="video/mp4"
+    )
 
-@app.route('/')
+
+@app.route("/")
 def index():
-    return 'Le serveur Flask fonctionne correctement !'
+    return "Le serveur Flask fonctionne correctement !"
 
-@app.route('/generate-video', methods=['POST'])
+
+@app.route("/generate-video", methods=["POST"])
 def generate_video_endpoint():
-    print("Fichiers reçus :", request.files.keys())
-
-    audio_file = request.files.get('audio')
-    image_files = request.files.getlist('images')
-    orientation = request.form.get('orientation', 'landscape')
+    audio_file = request.files.get("audio")
+    image_files = request.files.getlist("images")
 
     if not audio_file or not image_files:
-        return jsonify({'error': 'Audio file and at least one image file are required'}), 400
+        return jsonify({"error": "audio + au moins une image requis"}), 400
 
-    # Vérification de l'audio
-    audio_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}_{audio_file.filename}")
+    if not is_valid_audio_file(audio_file.filename or ""):
+        return jsonify({"error": "Format audio non supporté"}), 400
+
+    cleanup_paths = []
+    audio_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}_{os.path.basename(audio_file.filename)}")
     audio_file.save(audio_path)
+    cleanup_paths.append(audio_path)
 
     image_paths = []
     for image_file in image_files:
-        if image_file.filename.lower().endswith(('png', 'jpg', 'jpeg', 'bmp', 'gif')):
-            image_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}_{image_file.filename}")
-            image_file.save(image_path)
-            image_paths.append(image_path)
-        else:
-            print(f"Fichier ignoré car non valide : {image_file.filename}")
+        if not is_valid_image_file(image_file.filename or ""):
+            continue
+        image_path = os.path.join(
+            UPLOAD_FOLDER, f"{uuid.uuid4()}_{os.path.basename(image_file.filename)}"
+        )
+        image_file.save(image_path)
+        image_paths.append(image_path)
+        cleanup_paths.append(image_path)
+
+    if not image_paths:
+        _safe_unlink(cleanup_paths)
+        return jsonify({"error": "Aucune image valide"}), 400
 
     wav_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.wav")
-    convert_audio_to_wav(audio_path, wav_path)
-    
-    # Récupérer les paramètres optionnels pour les sous-titres
-    generate_subtitles_param = request.form.get("generate_subtitles", "true").lower() == "true"
-    subtitle_lang = request.form.get("subtitle_lang", "fr-FR")
-    
-    if generate_subtitles_param:
-        transcription_data = transcribe_audio(wav_path, chunk_duration_ms=30000, threshold_sec=60, language_code=subtitle_lang)
-        srt_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.srt")
-        generate_srt_subtitles(transcription_data, srt_path)
-    else:
-        # Créer un fichier SRT vide
-        srt_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.srt")
-        with open(srt_path, "w", encoding="utf-8") as f:
-            f.write("")
+    cleanup_paths.append(wav_path)
 
     output_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.mp4")
-    generate_video_with_subtitles_opencv(image_paths, wav_path, srt_path, output_path,
-                                         fps=24,
-                                         font_path="DejaVuSans.ttf",
-                                         font_size=48,
-                                         generate_subtitles=generate_subtitles_param)
-    if not os.path.exists(output_path):
-        print(f"Erreur : La vidéo {output_path} n'a pas été créée.")
-        return jsonify({'error': 'Video file not created'}), 500
+    generate_subtitles_param = (
+        request.form.get("generate_subtitles", "true").lower() == "true"
+    )
+    subtitle_lang = request.form.get("subtitle_lang", "fr-FR")
 
-    filename = os.path.basename(output_path)
-    file_url = request.host_url + 'outputs/' + filename
-    return jsonify({'url': file_url})
+    try:
+        convert_audio_to_wav(audio_path, wav_path)
+
+        srt_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.srt")
+        cleanup_paths.append(srt_path)
+        if generate_subtitles_param:
+            transcription_data = transcribe_audio(
+                wav_path,
+                chunk_duration_ms=30000,
+                threshold_sec=60,
+                language_code=subtitle_lang,
+            )
+            generate_srt_subtitles(transcription_data, srt_path)
+        else:
+            open(srt_path, "w").close()
+
+        generate_video_with_subtitles_opencv(
+            image_paths, wav_path, srt_path, output_path,
+            fps=24, font_path="DejaVuSans.ttf", font_size=48,
+            generate_subtitles=generate_subtitles_param,
+        )
+
+        if not os.path.exists(output_path):
+            return jsonify({"error": "Video file not created"}), 500
+
+        file_url = request.host_url + "outputs/" + os.path.basename(output_path)
+        return jsonify({"url": file_url})
+
+    except Exception as e:
+        print(f"[generate_video_endpoint] {e}")
+        return jsonify({"error": "Erreur génération vidéo", "details": str(e)}), 500
+    finally:
+        _safe_unlink(cleanup_paths)
 
 
+def _safe_unlink(paths):
+    for p in paths:
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except OSError as e:
+            print(f"[cleanup] Impossible de supprimer {p}: {e}")
+
+
+# ---------------------------------------------------------------
+# Monitoring (Basic auth, credentials depuis .env)
+# ---------------------------------------------------------------
 def check_auth(username, password):
-    """Vérifie que le couple utilisateur/mot de passe est correct."""
-    return username == USERNAME and password == PASSWORD
+    return hmac.compare_digest(username or "", config.MONITOR_USERNAME) and hmac.compare_digest(
+        password or "", config.MONITOR_PASSWORD
+    )
+
 
 def authenticate():
-    """Envoie une réponse 401 pour demander l'authentification."""
     return Response(
-        'Accès non autorisé.', 401,
-        {'WWW-Authenticate': 'Basic realm="Login Required"'}
+        "Accès non autorisé.",
+        401,
+        {"WWW-Authenticate": 'Basic realm="Login Required"'},
     )
+
 
 def requires_auth(f):
     @wraps(f)
@@ -580,20 +579,27 @@ def requires_auth(f):
         if not auth or not check_auth(auth.username, auth.password):
             return authenticate()
         return f(*args, **kwargs)
+
     return decorated
 
-@app.route('/logs')
+
+@app.route("/logs")
 @requires_auth
 def get_logs():
+    """Retourne les dernières lignes de nohup.out (tail au lieu de tout charger)."""
+    log_path = "nohup.out"
+    max_lines = 500
     try:
-        with open("nohup.out", "r") as f:
-            log_content = f.read()
+        with open(log_path, "r", errors="replace") as f:
+            lines = f.readlines()[-max_lines:]
+        return jsonify({"logs": "".join(lines)})
+    except FileNotFoundError:
+        return jsonify({"logs": "(no logs)"})
     except Exception as e:
-        log_content = "Erreur lors de la lecture des logs: " + str(e)
-    return jsonify({"logs": log_content})
+        return jsonify({"logs": f"Erreur lecture logs: {e}"}), 500
 
 
-@app.route('/monitor')
+@app.route("/monitor")
 @requires_auth
 def monitor():
     html = """
@@ -601,26 +607,25 @@ def monitor():
     <html>
       <head>
         <meta charset="UTF-8">
-        <title>Monitoring de l'application</title>
+        <title>Monitoring</title>
         <style>
-          body { font-family: monospace; background-color: #f0f0f0; padding: 20px; }
-          pre { background-color: #000; color: #0f0; padding: 10px; overflow: auto; height: 80vh; }
+          body { font-family: monospace; background:#f0f0f0; padding:20px; }
+          pre { background:#000; color:#0f0; padding:10px; overflow:auto; height:80vh; }
         </style>
       </head>
       <body>
-        <h1>Logs de l'application (mise à jour toutes les 5 secondes)</h1>
+        <h1>Logs (refresh 5s)</h1>
         <pre id="logArea">Chargement...</pre>
         <script>
           async function fetchLogs() {
             try {
-              const response = await fetch('/logs');
-              const data = await response.json();
+              const r = await fetch('/logs', { credentials: 'include' });
+              const data = await r.json();
               document.getElementById('logArea').textContent = data.logs;
-            } catch (error) {
-              document.getElementById('logArea').textContent = "Erreur lors du chargement des logs";
+            } catch (e) {
+              document.getElementById('logArea').textContent = "Erreur";
             }
           }
-          // Actualise toutes les 5 secondes
           setInterval(fetchLogs, 5000);
           fetchLogs();
         </script>
@@ -629,5 +634,8 @@ def monitor():
     """
     return render_template_string(html)
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+
+if __name__ == "__main__":
+    # En prod, lancer avec gunicorn :
+    #   gunicorn -w 2 -b 127.0.0.1:5001 app:app
+    app.run(debug=config.FLASK_DEBUG, host=config.FLASK_HOST, port=config.FLASK_PORT)
