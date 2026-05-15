@@ -225,6 +225,11 @@ app.post(
       }
       const validated = await _buildValidatedConfig(req, mediaFiles);
       const outputPath = path.resolve("outputs", `${uuidv4()}_final.mp4`);
+      console.log(
+        `[/render] start — media:${mediaFiles.length}, audio:${audioFile ? "yes" : "no"}, ` +
+        `music:${musicFile ? "yes" : "no"}, template:${req.body?.config ? "custom" : "default"}`
+      );
+      const renderStart = Date.now();
       const { totalDurationSec } = await render({
         config: validated,
         mediaFiles,
@@ -234,6 +239,15 @@ app.post(
         outputPath,
         tmpDir: "uploads",
       });
+      const elapsed = ((Date.now() - renderStart) / 1000).toFixed(1);
+      console.log(
+        `[/render] ✓ done in ${elapsed}s — output: ${path.basename(outputPath)}, ` +
+        `duration_sec: ${totalDurationSec.toFixed(2)}`
+      );
+      if (res.headersSent || req.destroyed || req.aborted) {
+        console.warn(`[/render] ⚠ client a coupé la connexion avant la fin (rendu OK, fichier dispo via /download)`);
+        return;
+      }
       return res.json({
         downloadUrl: `${PUBLIC_BASE_URL}/download/${path.basename(outputPath)}`,
         duration_sec: totalDurationSec,
@@ -243,10 +257,12 @@ app.post(
         media_count: mediaFiles.length,
         transitions: validated.transitions.type,
         overlays_count: validated.overlays.length,
+        elapsed_sec: parseFloat(elapsed),
       });
     } catch (err) {
       console.error("/render KO:", err.message);
       const status = err.status || 500;
+      if (res.headersSent) return;
       return res.status(status).json({
         error: status === 500 ? "Erreur interne" : err.message,
         ...(status !== 500 && { details: err.message }),
