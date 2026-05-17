@@ -22,7 +22,7 @@ require("dotenv").config();
 const { resolveConfig, listTemplates } = require("./lib/templates");
 const { listFormats } = require("./lib/formats");
 const { validateConfig } = require("./lib/validate");
-const { render } = require("./lib/render");
+const { render, concatAudioFiles } = require("./lib/render");
 const { transcribeSrt, transcribeWordLevel } = require("./lib/transcribe");
 const { defaultQueue } = require("./lib/queue");
 const { runPreflight, logPreflight } = require("./lib/preflight");
@@ -157,38 +157,49 @@ app.get("/formats", requireApiKey, (req, res) => {
  *   - libre : détection MIME (premier audio = voix, premier video/image = média)
  */
 function _parseUploads(allFiles) {
-  let audioFile = allFiles.find((f) => f.fieldname === "audio");
   let musicFile = allFiles.find((f) => f.fieldname === "music");
-  // Accepte 3 conventions de fieldname pour les médias :
-  //   - media          (un seul média)
-  //   - media[]        (syntaxe PHP-style array, naturelle avec Make.com)
-  //   - media_0, media_1, media_2... (suffixe numérique pour ordonner explicitement)
-  //
-  // Tri : media_N par N croissant. media[] / media : ordre d'arrivée multipart (stable).
-  const mediaFieldRe = /^media(\[\]|_\d+)?$/;
-  const mediaFiles = allFiles
-    .filter((f) => f !== audioFile && f !== musicFile && mediaFieldRe.test(f.fieldname))
+
+  // Audio : accepte "audio", "audio[]", "audio_0", "audio_1"...
+  // Si plusieurs fichiers reçus → seront concaténés en une seule voix-off
+  // par l'appelant via concatAudioFiles(). L'ordre est conservé.
+  const audioFieldRe = /^audio(\[\]|_\d+)?$/;
+  const audioFiles = allFiles
+    .filter((f) => f !== musicFile && audioFieldRe.test(f.fieldname))
     .sort((a, b) => {
       const idx = (f) => {
-        const m = f.fieldname.match(/^media_(\d+)$/);
-        return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER; // media[] passe après media_N triés
+        const m = f.fieldname.match(/^audio_(\d+)$/);
+        return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
       };
       return idx(a) - idx(b);
     });
 
-  // Fallback : si aucun fieldname nommé, on essaie de déduire depuis MIME
-  if (!audioFile && !mediaFiles.length) {
+  // Media : accepte "media", "media[]", "media_0", "media_1"...
+  const mediaFieldRe = /^media(\[\]|_\d+)?$/;
+  const mediaFiles = allFiles
+    .filter((f) =>
+      f !== musicFile && !audioFiles.includes(f) && mediaFieldRe.test(f.fieldname)
+    )
+    .sort((a, b) => {
+      const idx = (f) => {
+        const m = f.fieldname.match(/^media_(\d+)$/);
+        return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
+      };
+      return idx(a) - idx(b);
+    });
+
+  // Fallback : si aucun fieldname nommé, déduction depuis MIME
+  if (!audioFiles.length && !mediaFiles.length) {
     const audios = allFiles.filter((f) => f.mimetype.startsWith("audio/"));
-    audioFile = audios[0];
-    musicFile = audios[1]; // si 2 audios, le 2e est considéré comme musique
+    if (audios[0]) audioFiles.push(audios[0]);
+    if (audios[1]) musicFile = audios[1]; // 2nd audio MIME = musique
     for (const f of allFiles) {
-      if (f === audioFile || f === musicFile) continue;
+      if (audioFiles.includes(f) || f === musicFile) continue;
       if (f.mimetype.startsWith("image/") || f.mimetype.startsWith("video/")) {
         mediaFiles.push(f);
       }
     }
   }
-  return { audioFile, musicFile, mediaFiles };
+  return { audioFiles, musicFile, mediaFiles };
 }
 
 /**
@@ -261,7 +272,7 @@ app.post(
     const tempInputs = allFiles.map((f) => f.path);
 
     try {
-      const { audioFile, musicFile, mediaFiles } = _parseUploads(allFiles);
+      const { audioFiles, musicFile, mediaFiles } = _parseUploads(allFiles);
       if (!mediaFiles.length) {
         return res.status(400).json({
           error: "Au moins un fichier média (media_0, media_1...) est requis.",
@@ -270,8 +281,24 @@ app.post(
       const userMetadata = _parseMetadata(req.body?.metadata);
       const validated = await _buildValidatedConfig(req, mediaFiles);
       const outputPath = path.resolve("outputs", `${uuidv4()}_final.mp4`);
+
+      // Si plusieurs pistes audio, on les concatène en une seule voix-off.
+      let audioFile = audioFiles[0] || null;
+      let concatAudioPath = null;
+      if (audioFiles.length > 1) {
+        concatAudioPath = path.resolve("uploads", `${uuidv4()}_voiceover.m4a`);
+        await concatAudioFiles(audioFiles, concatAudioPath);
+        tempInputs.push(concatAudioPath);
+        audioFile = {
+          path: concatAudioPath,
+          originalname: "voiceover.m4a",
+          mimetype: "audio/mp4",
+        };
+        console.log(`[/render] ${audioFiles.length} pistes audio concaténées → ${path.basename(concatAudioPath)}`);
+      }
+
       console.log(
-        `[/render] start — media:${mediaFiles.length}, audio:${audioFile ? "yes" : "no"}, ` +
+        `[/render] start — media:${mediaFiles.length}, audio:${audioFile ? `yes (${audioFiles.length})` : "no"}, ` +
         `music:${musicFile ? "yes" : "no"}, template:${req.body?.config ? "custom" : "default"}` +
         (userMetadata ? `, metadata keys: [${Object.keys(userMetadata).join(", ")}]` : "")
       );
@@ -332,7 +359,7 @@ app.post(
     await ensureDirectoryExists("outputs");
     const allFiles = req.files || [];
     try {
-      const { audioFile, musicFile, mediaFiles } = _parseUploads(allFiles);
+      const { audioFiles, musicFile, mediaFiles } = _parseUploads(allFiles);
       if (!mediaFiles.length) {
         cleanupFiles(allFiles.map((f) => f.path));
         return res.status(400).json({ error: "Au moins un fichier média requis." });
@@ -350,6 +377,16 @@ app.post(
       const validated = await _buildValidatedConfig(req, mediaFiles);
       const outputPath = path.resolve("outputs", `${uuidv4()}_final.mp4`);
       const tempInputs = allFiles.map((f) => f.path);
+
+      // Concat de N pistes audio en une seule voix-off (cas TTS multi-segments).
+      let audioFile = audioFiles[0] || null;
+      if (audioFiles.length > 1) {
+        const concatPath = path.resolve("uploads", `${uuidv4()}_voiceover.m4a`);
+        await concatAudioFiles(audioFiles, concatPath);
+        tempInputs.push(concatPath);
+        audioFile = { path: concatPath, originalname: "voiceover.m4a", mimetype: "audio/mp4" };
+        console.log(`[/render/async] ${audioFiles.length} pistes audio concaténées avant enqueue`);
+      }
 
       const jobId = defaultQueue.enqueue(
         async (currentJobId) => {
