@@ -159,12 +159,19 @@ app.get("/formats", requireApiKey, (req, res) => {
 function _parseUploads(allFiles) {
   let audioFile = allFiles.find((f) => f.fieldname === "audio");
   let musicFile = allFiles.find((f) => f.fieldname === "music");
+  // Accepte 3 conventions de fieldname pour les médias :
+  //   - media          (un seul média)
+  //   - media[]        (syntaxe PHP-style array, naturelle avec Make.com)
+  //   - media_0, media_1, media_2... (suffixe numérique pour ordonner explicitement)
+  //
+  // Tri : media_N par N croissant. media[] / media : ordre d'arrivée multipart (stable).
+  const mediaFieldRe = /^media(\[\]|_\d+)?$/;
   const mediaFiles = allFiles
-    .filter((f) => f !== audioFile && f !== musicFile && /^media(_\d+)?$/.test(f.fieldname))
+    .filter((f) => f !== audioFile && f !== musicFile && mediaFieldRe.test(f.fieldname))
     .sort((a, b) => {
       const idx = (f) => {
         const m = f.fieldname.match(/^media_(\d+)$/);
-        return m ? parseInt(m[1], 10) : 0;
+        return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER; // media[] passe après media_N triés
       };
       return idx(a) - idx(b);
     });
